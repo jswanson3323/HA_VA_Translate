@@ -1,4 +1,3 @@
-# custom_components/fallback_conversation/catalog.py
 from __future__ import annotations
 
 import asyncio
@@ -11,7 +10,6 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers import exposed_entities
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,23 +32,16 @@ CACHE_TTL_SECONDS = 60
 class EntityCatalogItem:
     entity_id: str
     domain: str
-    name: str                 # friendly name
-    area_name: Optional[str]  # resolved area name
+    name: str
+    area_name: Optional[str]
     device_name: Optional[str]
 
 
-class ExposedEntityCatalog:
-    """Catalog of entities exposed to the conversation assistant."""
+class EntityCatalog:
+    """Catalog of likely voice-controllable entities (version-proof)."""
 
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        *,
-        assistant: str = "conversation",
-        domains: Optional[Set[str]] = None,
-    ) -> None:
+    def __init__(self, hass: HomeAssistant, *, domains: Optional[Set[str]] = None) -> None:
         self.hass = hass
-        self.assistant = assistant
         self.domains = domains or set(DEFAULT_DOMAINS)
 
         self._lock = asyncio.Lock()
@@ -60,15 +51,6 @@ class ExposedEntityCatalog:
         self._unsubs: List[callable] = []
 
     async def async_start(self) -> None:
-        """Start listeners and build initial catalog."""
-        # Exposure changes (the key one)
-        self._unsubs.append(
-            exposed_entities.async_listen_entity_updates(
-                self.hass, self.assistant, self._on_exposed_entities_changed
-            )
-        )
-
-        # Registry changes can affect names/area mapping
         ent_reg = er.async_get(self.hass)
         dev_reg = dr.async_get(self.hass)
         area_reg = ar.async_get(self.hass)
@@ -83,12 +65,11 @@ class ExposedEntityCatalog:
         for unsub in self._unsubs:
             try:
                 unsub()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
         self._unsubs.clear()
 
     async def async_get_items(self) -> List[EntityCatalogItem]:
-        """Get current items, rebuilding if TTL expired."""
         if (time.time() - self._built_at) > CACHE_TTL_SECONDS:
             await self.async_rebuild()
         return self._items
@@ -102,12 +83,7 @@ class ExposedEntityCatalog:
             self._items = items
             self._by_id = by_id
             self._built_at = time.time()
-
-            _LOGGER.debug(
-                "ExposedEntityCatalog rebuilt: %d entities (assistant=%s)",
-                len(items),
-                self.assistant,
-            )
+            _LOGGER.debug("EntityCatalog rebuilt: %d entities", len(items))
 
     async def _build(self) -> tuple[List[EntityCatalogItem], Dict[str, EntityCatalogItem]]:
         ent_reg = er.async_get(self.hass)
@@ -124,10 +100,13 @@ class ExposedEntityCatalog:
             if domain not in self.domains:
                 continue
 
-            if not exposed_entities.async_should_expose(self.hass, self.assistant, entity_id):
+            # Skip disabled/hidden entities (these are very unlikely to be intended for Assist)
+            if entry.disabled:
+                continue
+            if entry.hidden_by is not None:
                 continue
 
-            # Friendly name preference: registry name -> state attr -> entity_id
+            # Friendly name: registry -> state -> entity_id
             friendly = entry.name
             if not friendly:
                 st = self.hass.states.get(entity_id)
@@ -138,7 +117,6 @@ class ExposedEntityCatalog:
             device_name: Optional[str] = None
             area_name: Optional[str] = None
 
-            # Resolve device + area
             area_id = entry.area_id
             if entry.device_id:
                 dev = dev_reg.devices.get(entry.device_id)
@@ -163,16 +141,11 @@ class ExposedEntityCatalog:
         return out, by_id
 
     @callback
-    def _on_exposed_entities_changed(self, _entity_id: str) -> None:
-        self.hass.async_create_task(self.async_rebuild(force=True))
-
-    @callback
     def _on_registry_changed(self, _event) -> None:
         self.hass.async_create_task(self.async_rebuild(force=True))
 
 
-# ---- Small convenience: store one catalog instance in hass.data ----
-_DATA_KEY = "fallback_conversation_exposed_catalog"
+_DATA_KEY = "fallback_conversation_entity_catalog"
 
 
 async def async_get_exposed_catalog(
@@ -180,10 +153,11 @@ async def async_get_exposed_catalog(
     *,
     assistant: str = "conversation",
     domains: Optional[Set[str]] = None,
-) -> ExposedEntityCatalog:
-    cat: ExposedEntityCatalog | None = hass.data.get(_DATA_KEY)
+):
+    # 'assistant' kept for signature compatibility with your conversation.py
+    cat: EntityCatalog | None = hass.data.get(_DATA_KEY)
     if cat is None:
-        cat = ExposedEntityCatalog(hass, assistant=assistant, domains=domains)
+        cat = EntityCatalog(hass, domains=domains)
         hass.data[_DATA_KEY] = cat
         await cat.async_start()
     return cat
