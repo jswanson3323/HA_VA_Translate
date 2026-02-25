@@ -11,6 +11,7 @@ from homeassistant import config_entries
 from homeassistant.const import CONF_NAME
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.components import conversation
 from homeassistant.helpers.selector import (
     ConversationAgentSelector,
     ConversationAgentSelectorConfig,
@@ -84,6 +85,14 @@ class OptionsFlow(config_entries.OptionsFlow):
         self._options = dict(config_entry.data)
         self._options.update(dict(config_entry.options))
 
+    def _default_llm_agent_id(self) -> str:
+        """Pick a default non-Home Assistant conversation agent if available."""
+        agent_manager = conversation.get_agent_manager(self.hass)
+        for info in agent_manager.async_get_agent_info():
+            if info.id != conversation.const.HOME_ASSISTANT_AGENT:
+                return info.id
+        return conversation.const.HOME_ASSISTANT_AGENT
+
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -104,6 +113,9 @@ class OptionsFlow(config_entries.OptionsFlow):
 
     async def fallback_config_option_schema(self, options: dict) -> dict:
         """Return a schema for Fallback options."""
+        ha_agent_id = conversation.const.HOME_ASSISTANT_AGENT
+        llm_default = self._default_llm_agent_id()
+
         return {
             vol.Required(
                 CONF_DEBUG_LEVEL,
@@ -116,16 +128,17 @@ class OptionsFlow(config_entries.OptionsFlow):
                         SelectOptionDict(value=DEBUG_LEVEL_LOW_DEBUG, label="Some Debug"),
                         SelectOptionDict(value=DEBUG_LEVEL_VERBOSE_DEBUG, label="Verbose Debug"),
                     ],
-                    mode=SelectSelectorMode.DROPDOWN
+                    mode=SelectSelectorMode.DROPDOWN,
                 ),
             ),
             vol.Required(
                 CONF_PRIMARY_AGENT,
-                description={"suggested_value": options.get(CONF_PRIMARY_AGENT, "homeassistant")},
-                default="homeassistant",
+                description={"suggested_value": options.get(CONF_PRIMARY_AGENT, ha_agent_id)},
+                default=ha_agent_id,
             ): ConversationAgentSelector(ConversationAgentSelectorConfig()),
             vol.Required(
                 CONF_FALLBACK_AGENT,
-                description={"suggested_value": options.get(CONF_FALLBACK_AGENT, "")},
+                description={"suggested_value": options.get(CONF_FALLBACK_AGENT, llm_default)},
+                default=llm_default,
             ): ConversationAgentSelector(ConversationAgentSelectorConfig()),
-        };
+        }

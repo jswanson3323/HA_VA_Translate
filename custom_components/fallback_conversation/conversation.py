@@ -7,11 +7,9 @@ import logging
 
 
 from homeassistant.components import assist_pipeline, conversation
-from homeassistant.components.sensor import SensorEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import ulid
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
 from home_assistant_intents import get_languages
 
 from homeassistant.helpers import (
@@ -36,12 +34,6 @@ _LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
-DATA_DEFAULT_ENTITY = "conversation_default_entity"
-
-@callback
-def get_default_agent(hass: HomeAssistant) -> conversation.default_agent.DefaultAgent:
-    """Get the default agent."""
-    return hass.data[DATA_DEFAULT_ENTITY]
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> bool:
     """Set up Fallback Conversation from a config entry."""
@@ -105,14 +97,21 @@ class FallbackConversationAgent(conversation.ConversationEntity, conversation.Ab
     ) -> conversation.ConversationResult:
         """Process a sentence."""
         agent_manager = conversation.get_agent_manager(self.hass)
-        default_agent = get_default_agent(self.hass)
         agent_names = self._convert_agent_info_to_dict(
             agent_manager.async_get_agent_info()
         )
-        agent_names[conversation.const.HOME_ASSISTANT_AGENT] = default_agent.name
+
+        default_agent_id = conversation.const.HOME_ASSISTANT_AGENT
+        # Ensure the built-in HA agent name is present
+        if default_agent_id not in agent_names:
+            try:
+                agent_names[default_agent_id] = agent_manager.async_get_agent(default_agent_id).name
+            except Exception:  # noqa: BLE001
+                agent_names[default_agent_id] = "Home Assistant"
+
         agents = [
-            self.entry.options.get(CONF_PRIMARY_AGENT, default_agent),
-            self.entry.options.get(CONF_FALLBACK_AGENT, default_agent),
+            self.entry.options.get(CONF_PRIMARY_AGENT, default_agent_id),
+            self.entry.options.get(CONF_FALLBACK_AGENT, default_agent_id),
         ]
 
         debug_level = self.entry.options.get(CONF_DEBUG_LEVEL, DEBUG_LEVEL_NO_DEBUG)
@@ -120,7 +119,7 @@ class FallbackConversationAgent(conversation.ConversationEntity, conversation.Ab
         if user_input.conversation_id is None:
             user_input.conversation_id = ulid.ulid()
 
-                    # --- Translation layer (deterministic) ---
+        # --- Translation layer (deterministic) ---
         try:
             catalog = await async_get_exposed_catalog(self.hass, assistant="conversation")
             items = await catalog.async_get_items()
@@ -204,7 +203,7 @@ class FallbackConversationAgent(conversation.ConversationEntity, conversation.Ab
         previous_result,
     ) -> conversation.ConversationResult:
         """Process a specified agent."""
-        agent = conversation.agent_manager.async_get_agent(self.hass, agent_id)
+        agent = agent_manager.async_get_agent(agent_id)
 
         _LOGGER.debug("Processing in %s using %s with debug level %s: %s", user_input.language, agent_id, debug_level, user_input.text)
 
@@ -236,12 +235,17 @@ class FallbackConversationAgent(conversation.ConversationEntity, conversation.Ab
 
         agent_manager = conversation.get_agent_manager(self.hass)
 
-        r = {}
+        r: dict[str, str] = {}
         for agent_info in agents_info:
-            agent = agent_manager.async_get_agent(agent_info.id)
+            try:
+                agent = agent_manager.async_get_agent(agent_info.id)
+            except Exception:  # noqa: BLE001
+                agent = None
+
             agent_id = agent_info.id
-            if hasattr(agent, "registry_entry"):
+            if agent is not None and hasattr(agent, "registry_entry"):
                 agent_id = agent.registry_entry.entity_id
+
             r[agent_id] = agent_info.name
             _LOGGER.debug("agent_id %s has name %s", agent_id, agent_info.name)
         return r
