@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
-from homeassistant.components import exposed_entities
+from homeassistant.helpers import exposed_entities
 
 _LOGGER = logging.getLogger(__name__)
 
