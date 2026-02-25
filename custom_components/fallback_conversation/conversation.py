@@ -7,6 +7,8 @@ import logging
 
 
 from homeassistant.components import assist_pipeline, conversation
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import ulid
 
@@ -63,6 +65,38 @@ class FallbackConversationAgent(conversation.ConversationEntity, conversation.Ab
         )
         self.in_context_examples = None
 
+def _resolve_agent_id(
+    self, agent_manager: conversation.AgentManager, agent_id: str
+) -> str:
+    """Resolve stored selector value (agent id or entity_id) to a real agent id."""
+    # Try as-is first
+    try:
+        agent_manager.async_get_agent(agent_id)
+        return agent_id
+    except ValueError:
+        pass
+
+    # Map entity_id (e.g. conversation.home_assistant) back to agent id
+    for info in agent_manager.async_get_agent_info():
+        try:
+            agent = agent_manager.async_get_agent(info.id)
+        except Exception:  # noqa: BLE001
+            continue
+        if hasattr(agent, "registry_entry") and agent.registry_entry.entity_id == agent_id:
+            return info.id
+
+    # Last resort: strip conversation. prefix
+    if agent_id.startswith("conversation."):
+        maybe = agent_id.split(".", 1)[1]
+        try:
+            agent_manager.async_get_agent(maybe)
+            return maybe
+        except ValueError:
+            pass
+
+    return agent_id
+
+
     @property
     def supported_languages(self) -> list[str]:
         """Return a list of supported languages."""
@@ -108,13 +142,24 @@ class FallbackConversationAgent(conversation.ConversationEntity, conversation.Ab
                 agent_names[default_agent_id] = agent_manager.async_get_agent(default_agent_id).name
             except Exception:  # noqa: BLE001
                 agent_names[default_agent_id] = "Home Assistant"
+        primary_agent_id = (
+            self.entry.options.get(CONF_PRIMARY_AGENT)
+            or self.entry.data.get(CONF_PRIMARY_AGENT)
+            or default_agent_id
+        )
+        fallback_agent_id = (
+            self.entry.options.get(CONF_FALLBACK_AGENT)
+            or self.entry.data.get(CONF_FALLBACK_AGENT)
+            or default_agent_id
+        )
+        agents = [primary_agent_id, fallback_agent_id]
+        agents = [self._resolve_agent_id(agent_manager, a) for a in agents]
 
-        agents = [
-            self.entry.options.get(CONF_PRIMARY_AGENT, default_agent_id),
-            self.entry.options.get(CONF_FALLBACK_AGENT, default_agent_id),
-        ]
-
-        debug_level = self.entry.options.get(CONF_DEBUG_LEVEL, DEBUG_LEVEL_NO_DEBUG)
+        debug_level = (
+            self.entry.options.get(CONF_DEBUG_LEVEL)
+            if self.entry.options.get(CONF_DEBUG_LEVEL) is not None
+            else self.entry.data.get(CONF_DEBUG_LEVEL, DEBUG_LEVEL_NO_DEBUG)
+        )
 
         if user_input.conversation_id is None:
             user_input.conversation_id = ulid.ulid()
@@ -203,6 +248,7 @@ class FallbackConversationAgent(conversation.ConversationEntity, conversation.Ab
         previous_result,
     ) -> conversation.ConversationResult:
         """Process a specified agent."""
+        agent_id = self._resolve_agent_id(agent_manager, agent_id)
         agent = agent_manager.async_get_agent(agent_id)
 
         _LOGGER.debug("Processing in %s using %s with debug level %s: %s", user_input.language, agent_id, debug_level, user_input.text)
@@ -230,22 +276,26 @@ class FallbackConversationAgent(conversation.ConversationEntity, conversation.Ab
 
         return result
 
-    def _convert_agent_info_to_dict(self, agents_info: list[conversation.AgentInfo]) -> dict[str, str]:
-        """Takes a list of AgentInfo and makes it a dict of ID -> Name."""
+    
+def _convert_agent_info_to_dict(self, agents_info: list[conversation.AgentInfo]) -> dict[str, str]:
+    """Takes a list of AgentInfo and makes a dict mapping both agent_id and entity_id to name."""
 
-        agent_manager = conversation.get_agent_manager(self.hass)
+    agent_manager = conversation.get_agent_manager(self.hass)
 
-        r: dict[str, str] = {}
-        for agent_info in agents_info:
-            try:
-                agent = agent_manager.async_get_agent(agent_info.id)
-            except Exception:  # noqa: BLE001
-                agent = None
+    r: dict[str, str] = {}
+    for agent_info in agents_info:
+        # Always map by the canonical agent id
+        r[agent_info.id] = agent_info.name
 
-            agent_id = agent_info.id
-            if agent is not None and hasattr(agent, "registry_entry"):
-                agent_id = agent.registry_entry.entity_id
+        # Also map by the registered conversation entity id, if available
+        try:
+            agent = agent_manager.async_get_agent(agent_info.id)
+        except Exception:  # noqa: BLE001
+            agent = None
 
-            r[agent_id] = agent_info.name
-            _LOGGER.debug("agent_id %s has name %s", agent_id, agent_info.name)
-        return r
+        if agent is not None and hasattr(agent, "registry_entry"):
+            r[agent.registry_entry.entity_id] = agent_info.name
+
+        _LOGGER.debug("agent_id %s has name %s", agent_info.id, agent_info.name)
+
+    return r
