@@ -1,7 +1,10 @@
 """Fallback Conversation Agent"""
 from __future__ import annotations
+from .catalog import async_get_exposed_catalog
+from .translator import translate_to_action
 
 import logging
+
 
 from homeassistant.components import assist_pipeline, conversation
 from homeassistant.components.sensor import SensorEntity
@@ -116,6 +119,39 @@ class FallbackConversationAgent(conversation.ConversationEntity, conversation.Ab
 
         if user_input.conversation_id is None:
             user_input.conversation_id = ulid.ulid()
+
+                    # --- Translation layer (deterministic) ---
+        try:
+            catalog = await async_get_exposed_catalog(self.hass, assistant="conversation")
+            items = await catalog.async_get_items()
+
+            t_res = translate_to_action(user_input.text, items)
+
+            if t_res.handled and t_res.plan:
+                plan = t_res.plan
+
+                service_data = {"entity_id": plan.entity_id}
+                # temperature setter for climate
+                if plan.domain == "climate" and plan.service == "set_temperature" and plan.value is not None:
+                    service_data["temperature"] = plan.value
+
+                await self.hass.services.async_call(
+                    plan.domain,
+                    plan.service,
+                    service_data,
+                    blocking=True,
+                )
+
+                intent_response = intent.IntentResponse(language=user_input.language)
+                intent_response.async_set_speech("Done.")
+
+                return conversation.ConversationResult(
+                    conversation_id=user_input.conversation_id,
+                    response=intent_response,
+                )
+
+        except Exception as ex:  # noqa: BLE001
+            _LOGGER.exception("Translation layer error (falling back to agents): %s", ex)
 
         all_results = []
         result = None
