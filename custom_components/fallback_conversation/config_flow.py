@@ -35,34 +35,62 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-STEP_USER_DATA_SCHEMA = vol.Schema(
-    {
-        vol.Optional(CONF_NAME, default=DEFAULT_NAME): str,
-        vol.Optional(CONF_DEBUG_LEVEL, default=DEFAULT_DEBUG_LEVEL): SelectSelector(
-            SelectSelectorConfig(
-                options=[
-                    SelectOptionDict(value=DEBUG_LEVEL_NO_DEBUG, label="No Debug"),
-                    SelectOptionDict(value=DEBUG_LEVEL_LOW_DEBUG, label="Some Debug"),
-                    SelectOptionDict(value=DEBUG_LEVEL_VERBOSE_DEBUG, label="Verbose Debug"),
-                ],
-                mode=SelectSelectorMode.DROPDOWN
+def _user_step_schema(
+    *,
+    name_default: str,
+    debug_default: int,
+    primary_default: str,
+    fallback_default: str,
+) -> vol.Schema:
+    return vol.Schema(
+        {
+            vol.Optional(CONF_NAME, default=name_default): str,
+            vol.Optional(CONF_DEBUG_LEVEL, default=debug_default): SelectSelector(
+                SelectSelectorConfig(
+                    options=[
+                        SelectOptionDict(value=DEBUG_LEVEL_NO_DEBUG, label="No Debug"),
+                        SelectOptionDict(value=DEBUG_LEVEL_LOW_DEBUG, label="Some Debug"),
+                        SelectOptionDict(value=DEBUG_LEVEL_VERBOSE_DEBUG, label="Verbose Debug"),
+                    ],
+                    mode=SelectSelectorMode.DROPDOWN,
+                ),
             ),
-        ),
-    }
-)
+            vol.Optional(CONF_PRIMARY_AGENT, default=primary_default): ConversationAgentSelector(
+                ConversationAgentSelectorConfig()
+            ),
+            vol.Optional(CONF_FALLBACK_AGENT, default=fallback_default): ConversationAgentSelector(
+                ConversationAgentSelectorConfig()
+            ),
+        }
+    )
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Fallback Agent config flow."""
 
     VERSION = 2
 
+    def _default_llm_agent_id(self) -> str:
+        """Pick a default non-Home Assistant conversation agent if available."""
+        agent_manager = conversation.get_agent_manager(self.hass)
+        for info in agent_manager.async_get_agent_info():
+            if info.id != conversation.const.HOME_ASSISTANT_AGENT:
+                return info.id
+        return conversation.const.HOME_ASSISTANT_AGENT
+
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Handle the initial step."""
         _LOGGER.debug("ConfigFlow::user_input %s", user_input)
         if user_input is None:
+            ha_agent_id = conversation.const.HOME_ASSISTANT_AGENT
+            llm_default = self._default_llm_agent_id()
             return self.async_show_form(
                 step_id="user",
-                data_schema=STEP_USER_DATA_SCHEMA,
+                data_schema=_user_step_schema(
+                    name_default=DEFAULT_NAME,
+                    debug_default=DEFAULT_DEBUG_LEVEL,
+                    primary_default=ha_agent_id,
+                    fallback_default=llm_default,
+                ),
             )
 
         return self.async_create_entry(
