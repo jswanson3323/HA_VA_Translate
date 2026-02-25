@@ -1,5 +1,5 @@
 {
     "name": "Smart Router Conversation Agent",
     "render_readme": true,
-    "homeassistant": "2026.2.25"
+    "homeassistant": "2026.2.0"
 }
