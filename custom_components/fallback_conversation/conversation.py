@@ -68,13 +68,20 @@ class FallbackConversationAgent(
 
         AgentManager only accepts the agent id.
         """
+        # Normalize (selectors/storage may add whitespace or different casing)
+        agent_id_str = str(agent_id).strip()
+        agent_id_lc = agent_id_str.lower()
+
         # Hard-map the built-in HA agent entity_id to the built-in agent id
-        if agent_id in ("conversation.home_assistant", "conversation.homeassistant"):
+        if agent_id_lc in ("conversation.home_assistant", "conversation.homeassistant"):
             return conversation.const.HOME_ASSISTANT_AGENT
-        if agent_id.startswith("conversation."):
-            tail = agent_id.split(".", 1)[1]
+        if agent_id_lc.startswith("conversation."):
+            tail = agent_id_lc.split(".", 1)[1]
             if tail in ("home_assistant", "homeassistant"):
                 return conversation.const.HOME_ASSISTANT_AGENT
+
+        # Use stripped value from here on
+        agent_id = agent_id_str
 
         # Try as-is first
         try:
@@ -176,7 +183,7 @@ class FallbackConversationAgent(
         )
 
         agents = [primary_agent_id, fallback_agent_id]
-        agents = [self._resolve_agent_id(agent_manager, a) for a in agents]
+        agents = [self._resolve_agent_id(agent_manager, str(a)) for a in agents]
 
         debug_level = (
             self.entry.options.get(CONF_DEBUG_LEVEL)
@@ -291,7 +298,7 @@ class FallbackConversationAgent(
         previous_result: conversation.ConversationResult | None,
     ) -> conversation.ConversationResult:
         """Process a specified agent."""
-        agent_id = self._resolve_agent_id(agent_manager, agent_id)
+        agent_id = self._resolve_agent_id(agent_manager, str(agent_id).strip())
         agent = agent_manager.async_get_agent(agent_id)
 
         _LOGGER.debug(
