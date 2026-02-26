@@ -1,55 +1,49 @@
-"""Fallback Conversation Agent"""
+"""Fallback Conversation Agent."""
+
 from __future__ import annotations
-from .catalog import async_get_exposed_catalog
-from .translator import translate_to_action
 
 import logging
 
-
 from homeassistant.components import assist_pipeline, conversation
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv, intent
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import ulid
 
 from home_assistant_intents import get_languages
 
-from homeassistant.helpers import (
-    config_validation as cv,
-    intent,
-)
-
+from .catalog import async_get_exposed_catalog
 from .const import (
     CONF_DEBUG_LEVEL,
-    CONF_PRIMARY_AGENT,
     CONF_FALLBACK_AGENT,
-    DEBUG_LEVEL_NO_DEBUG,
+    CONF_PRIMARY_AGENT,
     DEBUG_LEVEL_LOW_DEBUG,
+    DEBUG_LEVEL_NO_DEBUG,
     DEBUG_LEVEL_VERBOSE_DEBUG,
     DOMAIN,
     STRANGE_ERROR_RESPONSES,
 )
-
-from .sensor import FallbackResultEntity
+from .translator import translate_to_action
 
 _LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> bool:
+async def async_setup_entry(
+    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+) -> bool:
     """Set up Fallback Conversation from a config entry."""
     agent = FallbackConversationAgent(hass, entry)
     async_add_entities([agent])
     return True
 
-class FallbackConversationAgent(conversation.ConversationEntity, conversation.AbstractConversationAgent):
+
+class FallbackConversationAgent(
+    conversation.ConversationEntity, conversation.AbstractConversationAgent
+):
     """Fallback Conversation Agent."""
-
-    last_used_agent: str | None
-
-    entry: ConfigEntry
-    hass: HomeAssistant
 
     _attr_has_entity_name = True
 
@@ -57,45 +51,82 @@ class FallbackConversationAgent(conversation.ConversationEntity, conversation.Ab
         """Initialize the agent."""
         self.hass = hass
         self.entry = entry
-        self.last_used_agent = None
+        self.last_used_agent: str | None = None
         self._attr_name = entry.title
         self._attr_unique_id = entry.entry_id
-        self._attr_supported_features = (
-            conversation.ConversationEntityFeature.CONTROL
-        )
+        self._attr_supported_features = conversation.ConversationEntityFeature.CONTROL
         self.in_context_examples = None
 
-def _resolve_agent_id(
-    self, agent_manager: conversation.AgentManager, agent_id: str
-) -> str:
-    """Resolve stored selector value (agent id or entity_id) to a real agent id."""
-    # Try as-is first
-    try:
-        agent_manager.async_get_agent(agent_id)
-        return agent_id
-    except ValueError:
-        pass
+    def _resolve_agent_id(
+        self, agent_manager: conversation.AgentManager, agent_id: str
+    ) -> str:
+        """Resolve stored selector value (agent id or entity_id) to a real agent id.
 
-    # Map entity_id (e.g. conversation.home_assistant) back to agent id
-    for info in agent_manager.async_get_agent_info():
-        try:
-            agent = agent_manager.async_get_agent(info.id)
-        except Exception:  # noqa: BLE001
-            continue
-        if hasattr(agent, "registry_entry") and agent.registry_entry.entity_id == agent_id:
-            return info.id
+        ConversationAgentSelector may store either:
+        - an AgentManager id (e.g. "homeassistant") OR
+        - a conversation entity_id (e.g. "conversation.home_assistant").
 
-    # Last resort: strip conversation. prefix
-    if agent_id.startswith("conversation."):
-        maybe = agent_id.split(".", 1)[1]
+        AgentManager only accepts the agent id.
+        """
+        # Hard-map the built-in HA agent entity_id to the built-in agent id
+        if agent_id in ("conversation.home_assistant", "conversation.homeassistant"):
+            return conversation.const.HOME_ASSISTANT_AGENT
+        if agent_id.startswith("conversation."):
+            tail = agent_id.split(".", 1)[1]
+            if tail in ("home_assistant", "homeassistant"):
+                return conversation.const.HOME_ASSISTANT_AGENT
+
+        # Try as-is first
         try:
-            agent_manager.async_get_agent(maybe)
-            return maybe
+            agent_manager.async_get_agent(agent_id)
+            return agent_id
         except ValueError:
             pass
 
-    return agent_id
+        # Map entity_id -> agent id by scanning known agents
+        for info in agent_manager.async_get_agent_info():
+            try:
+                agent = agent_manager.async_get_agent(info.id)
+            except Exception:  # noqa: BLE001
+                continue
 
+            if hasattr(agent, "registry_entry") and agent.registry_entry.entity_id == agent_id:
+                return info.id
+
+        # Last resort: strip conversation. prefix and retry
+        if agent_id.startswith("conversation."):
+            maybe = agent_id.split(".", 1)[1]
+            try:
+                agent_manager.async_get_agent(maybe)
+                return maybe
+            except ValueError:
+                pass
+
+        return agent_id
+
+    def _convert_agent_info_to_dict(
+        self, agents_info: list[conversation.AgentInfo]
+    ) -> dict[str, str]:
+        """Map both agent_id and conversation entity_id to display name."""
+        agent_manager = conversation.get_agent_manager(self.hass)
+
+        r: dict[str, str] = {}
+        for agent_info in agents_info:
+            # Canonical agent id
+            r[agent_info.id] = agent_info.name
+
+            # Also map the registered conversation entity id, if available
+            try:
+                agent = agent_manager.async_get_agent(agent_info.id)
+            except Exception:  # noqa: BLE001
+                agent = None
+
+            if agent is not None and hasattr(agent, "registry_entry"):
+                r[agent.registry_entry.entity_id] = agent_info.name
+
+            _LOGGER.debug("agent_id %s has name %s", agent_info.id, agent_info.name)
+
+        return r
 
     @property
     def supported_languages(self) -> list[str]:
@@ -122,26 +153,17 @@ def _resolve_agent_id(
         self, hass: HomeAssistant, entry: ConfigEntry
     ) -> None:
         """Handle options update."""
-        self._attr_supported_features = (
-            conversation.ConversationEntityFeature.CONTROL
-        )
+        self._attr_supported_features = conversation.ConversationEntityFeature.CONTROL
 
     async def async_process(
         self, user_input: conversation.ConversationInput
     ) -> conversation.ConversationResult:
         """Process a sentence."""
         agent_manager = conversation.get_agent_manager(self.hass)
-        agent_names = self._convert_agent_info_to_dict(
-            agent_manager.async_get_agent_info()
-        )
+        agent_names = self._convert_agent_info_to_dict(agent_manager.async_get_agent_info())
 
         default_agent_id = conversation.const.HOME_ASSISTANT_AGENT
-        # Ensure the built-in HA agent name is present
-        if default_agent_id not in agent_names:
-            try:
-                agent_names[default_agent_id] = agent_manager.async_get_agent(default_agent_id).name
-            except Exception:  # noqa: BLE001
-                agent_names[default_agent_id] = "Home Assistant"
+
         primary_agent_id = (
             self.entry.options.get(CONF_PRIMARY_AGENT)
             or self.entry.data.get(CONF_PRIMARY_AGENT)
@@ -152,6 +174,7 @@ def _resolve_agent_id(
             or self.entry.data.get(CONF_FALLBACK_AGENT)
             or default_agent_id
         )
+
         agents = [primary_agent_id, fallback_agent_id]
         agents = [self._resolve_agent_id(agent_manager, a) for a in agents]
 
@@ -174,9 +197,13 @@ def _resolve_agent_id(
             if t_res.handled and t_res.plan:
                 plan = t_res.plan
 
-                service_data = {"entity_id": plan.entity_id}
+                service_data: dict[str, object] = {"entity_id": plan.entity_id}
                 # temperature setter for climate
-                if plan.domain == "climate" and plan.service == "set_temperature" and plan.value is not None:
+                if (
+                    plan.domain == "climate"
+                    and plan.service == "set_temperature"
+                    and plan.value is not None
+                ):
                     service_data["temperature"] = plan.value
 
                 await self.hass.services.async_call(
@@ -197,13 +224,12 @@ def _resolve_agent_id(
         except Exception as ex:  # noqa: BLE001
             _LOGGER.exception("Translation layer error (falling back to agents): %s", ex)
 
-        all_results = []
-        result = None
+        all_results: list[conversation.ConversationResult] = []
+        result: conversation.ConversationResult | None = None
+
         for agent_id in agents:
-            agent_name = "[unknown]"
-            if agent_id in agent_names:
-                agent_name = agent_names[agent_id]
-            else:
+            agent_name = agent_names.get(agent_id, "[unknown]")
+            if agent_name == "[unknown]":
                 _LOGGER.warning("agent_name not found for agent_id %s", agent_id)
 
             result = await self._async_process_agent(
@@ -214,29 +240,46 @@ def _resolve_agent_id(
                 debug_level,
                 result,
             )
-            if result.response.response_type != intent.IntentResponseType.ERROR and result.response.speech['plain']['original_speech'].lower() not in STRANGE_ERROR_RESPONSES:
+
+            plain = result.response.speech.get("plain", {}) if result.response else {}
+            original = plain.get("original_speech", "")
+
+            if (
+                result.response.response_type != intent.IntentResponseType.ERROR
+                and str(original).lower() not in STRANGE_ERROR_RESPONSES
+            ):
                 return result
+
             all_results.append(result)
 
+        # Complete failure
         intent_response = intent.IntentResponse(language=user_input.language)
         err = "Complete fallback failure. No Conversation Agent was able to respond."
-        if debug_level == DEBUG_LEVEL_LOW_DEBUG:
-            r = all_results[-1].response.speech['plain']
-            err += f"\n{r.get('agent_name', 'UNKNOWN')} responded with: {r.get('original_speech', r['speech'])}"
-        elif debug_level == DEBUG_LEVEL_VERBOSE_DEBUG:
-            for res in all_results:
-                r = res.response.speech['plain']
-                err += f"\n{r.get('agent_name', 'UNKNOWN')} responded with: {r.get('original_speech', r['speech'])}"
+
+        if all_results:
+            if debug_level == DEBUG_LEVEL_LOW_DEBUG:
+                r = all_results[-1].response.speech["plain"]
+                err += (
+                    f"\n{r.get('agent_name', 'UNKNOWN')} responded with: "
+                    f"{r.get('original_speech', r.get('speech', ''))}"
+                )
+            elif debug_level == DEBUG_LEVEL_VERBOSE_DEBUG:
+                for res in all_results:
+                    r = res.response.speech["plain"]
+                    err += (
+                        f"\n{r.get('agent_name', 'UNKNOWN')} responded with: "
+                        f"{r.get('original_speech', r.get('speech', ''))}"
+                    )
+
         intent_response.async_set_error(
             intent.IntentResponseErrorCode.NO_INTENT_MATCH,
             err,
         )
-        result = conversation.ConversationResult(
-            conversation_id=result.conversation_id,
-            response=intent_response
-        )
 
-        return result
+        return conversation.ConversationResult(
+            conversation_id=(result.conversation_id if result else user_input.conversation_id),
+            response=intent_response,
+        )
 
     async def _async_process_agent(
         self,
@@ -245,57 +288,55 @@ def _resolve_agent_id(
         agent_name: str,
         user_input: conversation.ConversationInput,
         debug_level: int,
-        previous_result,
+        previous_result: conversation.ConversationResult | None,
     ) -> conversation.ConversationResult:
         """Process a specified agent."""
         agent_id = self._resolve_agent_id(agent_manager, agent_id)
         agent = agent_manager.async_get_agent(agent_id)
 
-        _LOGGER.debug("Processing in %s using %s with debug level %s: %s", user_input.language, agent_id, debug_level, user_input.text)
+        _LOGGER.debug(
+            "Processing in %s using %s with debug level %s: %s",
+            user_input.language,
+            agent_id,
+            debug_level,
+            user_input.text,
+        )
 
         result = await agent.async_process(user_input)
-        r = result.response.speech['plain']['speech']
-        result.response.speech['plain']['original_speech'] = r
-        result.response.speech['plain']['agent_name'] = agent_name
-        result.response.speech['plain']['agent_id'] = agent_id
+
+        # Ensure speech[plain] metadata exists
+        if "plain" not in result.response.speech:
+            result.response.speech["plain"] = {"speech": ""}
+
+        r = result.response.speech["plain"].get("speech", "")
+        result.response.speech["plain"]["original_speech"] = r
+        result.response.speech["plain"]["agent_name"] = agent_name
+        result.response.speech["plain"]["agent_id"] = agent_id
+
         if debug_level == DEBUG_LEVEL_LOW_DEBUG:
-            result.response.speech['plain']['speech'] = f"{agent_name} responded with: {r}"
+            result.response.speech["plain"]["speech"] = f"{agent_name} responded with: {r}"
         elif debug_level == DEBUG_LEVEL_VERBOSE_DEBUG:
             if previous_result is not None:
-                pr = previous_result.response.speech['plain'].get('original_speech', previous_result.response.speech['plain']['speech'])
-                result.response.speech['plain']['speech'] = f"{previous_result.response.speech['plain'].get('agent_name', 'UNKNOWN')} failed with response: {pr} Then {agent_name} responded with {r}"
+                pr_plain = previous_result.response.speech.get("plain", {})
+                pr = pr_plain.get("original_speech", pr_plain.get("speech", ""))
+                prev_name = pr_plain.get("agent_name", "UNKNOWN")
+                result.response.speech["plain"][
+                    "speech"
+                ] = f"{prev_name} failed with response: {pr} Then {agent_name} responded with {r}"
             else:
-                result.response.speech['plain']['speech'] = f"{agent_name} responded with: {r}"
+                result.response.speech["plain"]["speech"] = f"{agent_name} responded with: {r}"
 
-        # Save result to entity
-        result_entity = self.hass.data[DOMAIN][self.entry.entry_id].get("result_entity")
-        if result_entity:
-            result_entity.update_result(agent_name, user_input.text, result)
-        else:
-            _LOGGER.warning("Result entity not found. Sensor platform may not be initialized yet.")
+        # Save result to entity, if present
+        try:
+            domain_data = self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id, {})
+            result_entity = domain_data.get("result_entity")
+            if result_entity:
+                result_entity.update_result(agent_name, user_input.text, result)
+            else:
+                _LOGGER.debug(
+                    "Result entity not found. Sensor platform may not be initialized yet."
+                )
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("Failed to update result entity", exc_info=True)
 
         return result
-
-    
-def _convert_agent_info_to_dict(self, agents_info: list[conversation.AgentInfo]) -> dict[str, str]:
-    """Takes a list of AgentInfo and makes a dict mapping both agent_id and entity_id to name."""
-
-    agent_manager = conversation.get_agent_manager(self.hass)
-
-    r: dict[str, str] = {}
-    for agent_info in agents_info:
-        # Always map by the canonical agent id
-        r[agent_info.id] = agent_info.name
-
-        # Also map by the registered conversation entity id, if available
-        try:
-            agent = agent_manager.async_get_agent(agent_info.id)
-        except Exception:  # noqa: BLE001
-            agent = None
-
-        if agent is not None and hasattr(agent, "registry_entry"):
-            r[agent.registry_entry.entity_id] = agent_info.name
-
-        _LOGGER.debug("agent_id %s has name %s", agent_info.id, agent_info.name)
-
-    return r
