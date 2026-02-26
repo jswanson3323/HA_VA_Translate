@@ -70,26 +70,41 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 2
 
     def _resolve_selected_agent_id(self, value: Any) -> str:
-        """Resolve selected display name to AgentManager ULID."""
+        """Resolve selector value (entity_id or name) to AgentManager ULID."""
         agent_manager = conversation.get_agent_manager(self.hass)
-        selected_name = str(value).strip()
+        raw = str(value).strip()
 
-        for info in agent_manager.async_get_agent_info():
-            if info.name == selected_name:
-                return info.id
-
-        # If already a valid id, keep it
+        # If already a valid AgentManager id, return it
         try:
-            agent_manager.async_get_agent(selected_name)
-            return selected_name
+            agent_manager.async_get_agent(raw)
+            return raw
         except ValueError:
             pass
 
+        # If selector returned entity_id like 'conversation.home_assistant'
+        if raw.startswith("conversation."):
+            for info in agent_manager.async_get_agent_info():
+                try:
+                    agent = agent_manager.async_get_agent(info.id)
+                except Exception:
+                    continue
+
+                if (
+                    hasattr(agent, "registry_entry")
+                    and agent.registry_entry.entity_id == raw
+                ):
+                    return info.id
+
+        # Fallback: match by display name
+        for info in agent_manager.async_get_agent_info():
+            if info.name == raw:
+                return info.id
+
         _LOGGER.error(
             "[CONFIG_FLOW] Could not resolve agent '%s'. Storing raw value.",
-            selected_name,
+            raw,
         )
-        return selected_name
+        return raw
 
     def _default_llm_agent_id(self) -> str:
         """Pick the first non-Home Assistant agent ULID if available."""
@@ -154,26 +169,41 @@ class OptionsFlow(config_entries.OptionsFlow):
         self._options.update(dict(config_entry.options))
 
     def _resolve_selected_agent_id(self, value: Any) -> str:
-        """Resolve selected display name to AgentManager ULID."""
+        """Resolve selector value (entity_id or name) to AgentManager ULID."""
         agent_manager = conversation.get_agent_manager(self.hass)
-        selected_name = str(value).strip()
+        raw = str(value).strip()
 
-        for info in agent_manager.async_get_agent_info():
-            if info.name == selected_name:
-                return info.id
-
-        # If already a valid id, keep it
+        # If already a valid AgentManager id, return it
         try:
-            agent_manager.async_get_agent(selected_name)
-            return selected_name
+            agent_manager.async_get_agent(raw)
+            return raw
         except ValueError:
             pass
 
+        # If selector returned entity_id like 'conversation.home_assistant'
+        if raw.startswith("conversation."):
+            for info in agent_manager.async_get_agent_info():
+                try:
+                    agent = agent_manager.async_get_agent(info.id)
+                except Exception:
+                    continue
+
+                if (
+                    hasattr(agent, "registry_entry")
+                    and agent.registry_entry.entity_id == raw
+                ):
+                    return info.id
+
+        # Fallback: match by display name
+        for info in agent_manager.async_get_agent_info():
+            if info.name == raw:
+                return info.id
+
         _LOGGER.error(
             "[CONFIG_FLOW] Could not resolve agent '%s'. Storing raw value.",
-            selected_name,
+            raw,
         )
-        return selected_name
+        return raw
 
     def _default_llm_agent_id(self) -> str:
         """Pick the first non-Home Assistant agent ULID if available."""
