@@ -177,6 +177,15 @@ class FallbackConversationAgent(
     ) -> conversation.ConversationResult:
         """Process a sentence."""
         agent_manager = conversation.get_agent_manager(self.hass)
+        # DEBUG: log all known AgentManager ids
+        try:
+            infos = agent_manager.async_get_agent_info()
+            _LOGGER.error(
+                "[DEBUG] Available AgentManager ids: %s",
+                [i.id for i in infos],
+            )
+        except Exception:
+            _LOGGER.exception("[DEBUG] Failed to list AgentManager ids")
         agent_names = self._convert_agent_info_to_dict(
             agent_manager.async_get_agent_info()
         )
@@ -312,8 +321,40 @@ class FallbackConversationAgent(
     ) -> conversation.ConversationResult:
         """Process a specified agent."""
         # Resolve entity_id-like selector values to AgentManager ids
+        original_agent_id = agent_id
         agent_id = self._resolve_agent_id(agent_manager, str(agent_id).strip())
-        agent = agent_manager.async_get_agent(agent_id)
+
+        # DEBUG: show what we're about to request
+        try:
+            infos = agent_manager.async_get_agent_info()
+            _LOGGER.error(
+                "[DEBUG] Attempting async_get_agent(%r) resolved from %r. Available ids=%s",
+                agent_id,
+                original_agent_id,
+                [i.id for i in infos],
+            )
+        except Exception:
+            _LOGGER.exception("[DEBUG] Failed to inspect AgentManager before lookup")
+
+        # SAFETY: do not crash if agent does not exist
+        try:
+            agent = agent_manager.async_get_agent(agent_id)
+        except ValueError:
+            _LOGGER.error(
+                "[DEBUG] Agent '%s' not found. Skipping this agent.",
+                agent_id,
+            )
+
+            intent_response = intent.IntentResponse(language=user_input.language)
+            intent_response.async_set_error(
+                intent.IntentResponseErrorCode.NO_INTENT_MATCH,
+                f"Agent {agent_id} not found",
+            )
+
+            return conversation.ConversationResult(
+                conversation_id=user_input.conversation_id,
+                response=intent_response,
+            )
 
         _LOGGER.debug(
             "Processing in %s using %s with debug level %s: %s",
