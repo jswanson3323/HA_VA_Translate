@@ -15,7 +15,7 @@ _LOGGER = logging.getLogger(__name__)
 # --- tuning ---
 MIN_SCORE = 0.88
 MIN_MARGIN = 0.06
-AREA_MIN_SCORE = 0.72
+AREA_MIN_SCORE = 0.58
 
 ALLOW_DOMAINS = {
     "light",
@@ -141,6 +141,32 @@ def _best_area_match(target: str, catalog: Iterable[EntityCatalogItem]) -> Optio
     return None
 
 
+def _strip_area_from_target(target_n: str, matched_area: str) -> str:
+    """Remove likely area phrase tokens from target before entity scoring.
+
+    Example: target='break room fan', matched_area='great room' -> 'fan'
+    This keeps entity matching strict while making area fuzziness tolerant.
+    """
+    if not target_n or not matched_area:
+        return target_n
+
+    # If the exact area text appears, remove it directly
+    if matched_area in target_n:
+        stripped = target_n.replace(matched_area, " ")
+        return _norm(stripped)
+
+    # Common area suffixes (lets us remove 'break room', 'master bedroom', etc.)
+    suffixes = {"room", "bedroom", "bathroom", "garage", "kitchen", "office", "basement", "living"}
+    area_tokens = matched_area.split()
+
+    # If matched_area contains a known suffix, remove '<word> <suffix>' occurrences from target
+    for suf in suffixes:
+        if suf in area_tokens:
+            target_n = re.sub(rf"\b\w+\s+{re.escape(suf)}\b", " ", target_n)
+
+    return _norm(target_n)
+
+
 def _resolve_entity(
     target: str,
     catalog: Iterable[EntityCatalogItem],
@@ -151,6 +177,18 @@ def _resolve_entity(
 
     # Try resolving area first (improves "break room" vs "great room")
     matched_area = _best_area_match(target, catalog)
+
+    score_target_n = target_n
+    if matched_area:
+        stripped = _strip_area_from_target(target_n, matched_area)
+        if stripped:
+            score_target_n = stripped
+        _LOGGER.warning(
+            "[ENTITY TARGET] original='%s' matched_area='%s' scoring_target='%s'",
+            target_n,
+            matched_area,
+            score_target_n,
+        )
 
     best = None  # (score, item)
     second = None
@@ -165,10 +203,10 @@ def _resolve_entity(
                 continue
 
         for cand in _make_candidates(item):
-            score = _token_score(target_n, cand)
+            score = _token_score(score_target_n, cand)
             _LOGGER.warning(
                 "[ENTITY SCORE] target='%s' cand='%s' entity='%s' score=%.3f",
-                target_n,
+                score_target_n,
                 cand,
                 item.entity_id,
                 score,
