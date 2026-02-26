@@ -11,6 +11,7 @@ from .catalog import EntityCatalogItem
 # --- tuning ---
 MIN_SCORE = 0.88
 MIN_MARGIN = 0.06
+AREA_MIN_SCORE = 0.72
 
 ALLOW_DOMAINS = {
     "light",
@@ -106,13 +107,35 @@ def _make_candidates(item: EntityCatalogItem) -> list[str]:
     return sorted(cands)
 
 
+def _best_area_match(target: str, catalog: Iterable[EntityCatalogItem]) -> Optional[str]:
+    """Return best fuzzy-matched area name if strong enough."""
+    target_n = _norm(target)
+    areas = { _norm(i.area_name) for i in catalog if i.area_name }
+
+    best_area = None
+    best_score = 0.0
+
+    for area in areas:
+        score = _token_score(target_n, area)
+        if score > best_score:
+            best_score = score
+            best_area = area
+
+    if best_score >= AREA_MIN_SCORE:
+        return best_area
+
+    return None
+
+
 def _resolve_entity(
     target: str,
     catalog: Iterable[EntityCatalogItem],
     satellite_area: Optional[str] = None,
 ) -> Tuple[Optional[str], float]:
     target_n = _norm(target)
-    sat_area_n = _norm(satellite_area) if satellite_area else None
+
+    # Try resolving area first (improves "break room" vs "great room")
+    matched_area = _best_area_match(target, catalog)
 
     best = None  # (score, item)
     second = None
@@ -120,6 +143,11 @@ def _resolve_entity(
     for item in catalog:
         if item.domain not in ALLOW_DOMAINS:
             continue
+
+        # If we detected a likely area, prefer entities in that area
+        if matched_area and item.area_name:
+            if _norm(item.area_name) != matched_area:
+                continue
 
         for cand in _make_candidates(item):
             score = _token_score(target_n, cand)
