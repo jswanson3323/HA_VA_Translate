@@ -69,6 +69,34 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 2
 
+    def _resolve_selected_agent_id(self, value: Any) -> str:
+        """Resolve selector value (agent id or conversation entity_id) to an AgentManager agent id."""
+        agent_manager = conversation.get_agent_manager(self.hass)
+
+        raw = str(value).strip()
+        raw_lc = raw.lower()
+
+        # Selector often returns an entity_id for the built-in HA agent
+        if raw_lc in ("conversation.home_assistant", "conversation.homeassistant"):
+            return "homeassistant"
+
+        # If it's a conversation entity_id, strip the prefix and try again
+        if raw_lc.startswith("conversation."):
+            raw = raw.split(".", 1)[1].strip()
+
+        # If already a valid AgentManager id, keep it
+        try:
+            agent_manager.async_get_agent(raw)
+            return raw
+        except ValueError:
+            pass
+
+        # Common built-in id fallback
+        if raw.lower() in ("homeassistant", "home_assistant"):
+            return "homeassistant"
+
+        return raw
+
     def _default_llm_agent_id(self) -> str:
         """Pick a default non-Home Assistant conversation agent if available."""
         agent_manager = conversation.get_agent_manager(self.hass)
@@ -93,6 +121,16 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ),
             )
 
+        # Resolve and store usable AgentManager ids
+        if CONF_PRIMARY_AGENT in user_input:
+            user_input[CONF_PRIMARY_AGENT] = self._resolve_selected_agent_id(
+                user_input[CONF_PRIMARY_AGENT]
+            )
+        if CONF_FALLBACK_AGENT in user_input:
+            user_input[CONF_FALLBACK_AGENT] = self._resolve_selected_agent_id(
+                user_input[CONF_FALLBACK_AGENT]
+            )
+
         return self.async_create_entry(
             title=user_input.get(CONF_NAME, DEFAULT_NAME),
             data=user_input,
@@ -113,6 +151,30 @@ class OptionsFlow(config_entries.OptionsFlow):
         self._options = dict(config_entry.data)
         self._options.update(dict(config_entry.options))
 
+    def _resolve_selected_agent_id(self, value: Any) -> str:
+        """Resolve selector value (agent id or conversation entity_id) to an AgentManager agent id."""
+        agent_manager = conversation.get_agent_manager(self.hass)
+
+        raw = str(value).strip()
+        raw_lc = raw.lower()
+
+        if raw_lc in ("conversation.home_assistant", "conversation.homeassistant"):
+            return "homeassistant"
+
+        if raw_lc.startswith("conversation."):
+            raw = raw.split(".", 1)[1].strip()
+
+        try:
+            agent_manager.async_get_agent(raw)
+            return raw
+        except ValueError:
+            pass
+
+        if raw.lower() in ("homeassistant", "home_assistant"):
+            return "homeassistant"
+
+        return raw
+
     def _default_llm_agent_id(self) -> str:
         """Pick a default non-Home Assistant conversation agent if available."""
         agent_manager = conversation.get_agent_manager(self.hass)
@@ -126,6 +188,16 @@ class OptionsFlow(config_entries.OptionsFlow):
     ) -> FlowResult:
         """Manage the options."""
         if user_input is not None:
+            # Resolve and store usable AgentManager ids
+            if CONF_PRIMARY_AGENT in user_input:
+                user_input[CONF_PRIMARY_AGENT] = self._resolve_selected_agent_id(
+                    user_input[CONF_PRIMARY_AGENT]
+                )
+            if CONF_FALLBACK_AGENT in user_input:
+                user_input[CONF_FALLBACK_AGENT] = self._resolve_selected_agent_id(
+                    user_input[CONF_FALLBACK_AGENT]
+                )
+
             self._options.update(user_input)
             return self.async_create_entry(
                 title=user_input.get(CONF_NAME, DEFAULT_NAME),

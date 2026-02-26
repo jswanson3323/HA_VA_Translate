@@ -74,11 +74,11 @@ class FallbackConversationAgent(
 
         # Hard-map the built-in HA agent entity_id to the built-in agent id
         if agent_id_lc in ("conversation.home_assistant", "conversation.homeassistant"):
-            return conversation.const.HOME_ASSISTANT_AGENT
+            return "homeassistant"
         if agent_id_lc.startswith("conversation."):
             tail = agent_id_lc.split(".", 1)[1]
             if tail in ("home_assistant", "homeassistant"):
-                return conversation.const.HOME_ASSISTANT_AGENT
+                return "homeassistant"
 
         # Use stripped value from here on
         agent_id = agent_id_str
@@ -97,7 +97,10 @@ class FallbackConversationAgent(
             except Exception:  # noqa: BLE001
                 continue
 
-            if hasattr(agent, "registry_entry") and agent.registry_entry.entity_id == agent_id:
+            if (
+                hasattr(agent, "registry_entry")
+                and agent.registry_entry.entity_id == agent_id
+            ):
                 return info.id
 
         # Last resort: strip conversation. prefix and retry
@@ -167,9 +170,12 @@ class FallbackConversationAgent(
     ) -> conversation.ConversationResult:
         """Process a sentence."""
         agent_manager = conversation.get_agent_manager(self.hass)
-        agent_names = self._convert_agent_info_to_dict(agent_manager.async_get_agent_info())
+        agent_names = self._convert_agent_info_to_dict(
+            agent_manager.async_get_agent_info()
+        )
 
-        default_agent_id = conversation.const.HOME_ASSISTANT_AGENT
+        # AgentManager id for the built-in Home Assistant agent
+        default_agent_id = "homeassistant"
 
         primary_agent_id = (
             self.entry.options.get(CONF_PRIMARY_AGENT)
@@ -298,6 +304,7 @@ class FallbackConversationAgent(
         previous_result: conversation.ConversationResult | None,
     ) -> conversation.ConversationResult:
         """Process a specified agent."""
+        # Resolve entity_id-like selector values to AgentManager ids
         agent_id = self._resolve_agent_id(agent_manager, str(agent_id).strip())
         agent = agent_manager.async_get_agent(agent_id)
 
