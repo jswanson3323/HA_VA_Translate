@@ -8,6 +8,10 @@ from typing import Iterable, Optional, Tuple
 
 from .catalog import EntityCatalogItem
 
+import logging
+
+_LOGGER = logging.getLogger(__name__)
+
 # --- tuning ---
 MIN_SCORE = 0.88
 MIN_MARGIN = 0.06
@@ -110,6 +114,12 @@ def _make_candidates(item: EntityCatalogItem) -> list[str]:
 def _best_area_match(target: str, catalog: Iterable[EntityCatalogItem]) -> Optional[str]:
     """Return best fuzzy-matched area name if strong enough."""
     target_n = _norm(target)
+
+    # Remove common device words before area matching
+    device_words = {"light", "fan", "switch", "cover", "lock", "thermostat", "scene"}
+    tokens = [t for t in target_n.split() if t not in device_words]
+    target_n = " ".join(tokens)
+
     areas = { _norm(i.area_name) for i in catalog if i.area_name }
 
     best_area = None
@@ -117,9 +127,13 @@ def _best_area_match(target: str, catalog: Iterable[EntityCatalogItem]) -> Optio
 
     for area in areas:
         score = _token_score(target_n, area)
+        _LOGGER.warning("[AREA SCORE] target='%s' area='%s' score=%.3f", target_n, area, score)
         if score > best_score:
             best_score = score
             best_area = area
+
+    if best_area:
+        _LOGGER.warning("[AREA BEST] target='%s' best_area='%s' best_score=%.3f", target_n, best_area, best_score)
 
     if best_score >= AREA_MIN_SCORE:
         return best_area
@@ -133,6 +147,7 @@ def _resolve_entity(
     satellite_area: Optional[str] = None,
 ) -> Tuple[Optional[str], float]:
     target_n = _norm(target)
+    sat_area_n = _norm(satellite_area) if satellite_area else None
 
     # Try resolving area first (improves "break room" vs "great room")
     matched_area = _best_area_match(target, catalog)
@@ -151,6 +166,13 @@ def _resolve_entity(
 
         for cand in _make_candidates(item):
             score = _token_score(target_n, cand)
+            _LOGGER.warning(
+                "[ENTITY SCORE] target='%s' cand='%s' entity='%s' score=%.3f",
+                target_n,
+                cand,
+                item.entity_id,
+                score,
+            )
 
             # tiny tie-break bump if satellite area matches entity area
             if sat_area_n and item.area_name and _norm(item.area_name) == sat_area_n:
