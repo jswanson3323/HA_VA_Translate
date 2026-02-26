@@ -57,62 +57,6 @@ class FallbackConversationAgent(
         self._attr_supported_features = conversation.ConversationEntityFeature.CONTROL
         self.in_context_examples = None
 
-    def _resolve_agent_id(
-        self, agent_manager: conversation.AgentManager, agent_id: str
-    ) -> str:
-        """Resolve stored selector value (agent id or entity_id) to a real agent id.
-
-        ConversationAgentSelector may store either:
-        - an AgentManager id (e.g. "homeassistant") OR
-        - a conversation entity_id (e.g. "conversation.home_assistant").
-
-        AgentManager only accepts the agent id.
-        """
-        # Normalize (selectors/storage may add whitespace or different casing)
-        agent_id_str = str(agent_id).strip()
-        agent_id_lc = agent_id_str.lower()
-
-        # Hard-map the built-in HA agent entity_id to the built-in agent id
-        if agent_id_lc in ("conversation.home_assistant", "conversation.homeassistant"):
-            return "homeassistant"
-        if agent_id_lc.startswith("conversation."):
-            tail = agent_id_lc.split(".", 1)[1]
-            if tail in ("home_assistant", "homeassistant"):
-                return "homeassistant"
-
-        # Use stripped value from here on
-        agent_id = agent_id_str
-
-        # Try as-is first
-        try:
-            agent_manager.async_get_agent(agent_id)
-            return agent_id
-        except ValueError:
-            pass
-
-        # Map entity_id -> agent id by scanning known agents
-        for info in agent_manager.async_get_agent_info():
-            try:
-                agent = agent_manager.async_get_agent(info.id)
-            except Exception:  # noqa: BLE001
-                continue
-
-            if (
-                hasattr(agent, "registry_entry")
-                and agent.registry_entry.entity_id == agent_id
-            ):
-                return info.id
-
-        # Last resort: strip conversation. prefix and retry
-        if agent_id.startswith("conversation."):
-            maybe = agent_id.split(".", 1)[1]
-            try:
-                agent_manager.async_get_agent(maybe)
-                return maybe
-            except ValueError:
-                pass
-
-        return agent_id
 
     def _convert_agent_info_to_dict(
         self, agents_info: list[conversation.AgentInfo]
@@ -190,22 +134,16 @@ class FallbackConversationAgent(
             agent_manager.async_get_agent_info()
         )
 
-        # AgentManager id for the built-in Home Assistant agent
-        default_agent_id = "homeassistant"
-
         primary_agent_id = (
             self.entry.options.get(CONF_PRIMARY_AGENT)
             or self.entry.data.get(CONF_PRIMARY_AGENT)
-            or default_agent_id
         )
         fallback_agent_id = (
             self.entry.options.get(CONF_FALLBACK_AGENT)
             or self.entry.data.get(CONF_FALLBACK_AGENT)
-            or default_agent_id
         )
 
-        agents = [primary_agent_id, fallback_agent_id]
-        agents = [self._resolve_agent_id(agent_manager, str(a)) for a in agents]
+        agents = [a for a in (primary_agent_id, fallback_agent_id) if a]
 
         debug_level = (
             self.entry.options.get(CONF_DEBUG_LEVEL)
@@ -322,7 +260,6 @@ class FallbackConversationAgent(
         """Process a specified agent."""
         # Resolve entity_id-like selector values to AgentManager ids
         original_agent_id = agent_id
-        agent_id = self._resolve_agent_id(agent_manager, str(agent_id).strip())
 
         # DEBUG: show what we're about to request
         try:

@@ -70,40 +70,42 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 2
 
     def _resolve_selected_agent_id(self, value: Any) -> str:
-        """Resolve selector value (agent id or conversation entity_id) to an AgentManager agent id."""
+        """Resolve selected display name to AgentManager ULID."""
         agent_manager = conversation.get_agent_manager(self.hass)
+        selected_name = str(value).strip()
 
-        raw = str(value).strip()
-        raw_lc = raw.lower()
+        for info in agent_manager.async_get_agent_info():
+            if info.name == selected_name:
+                return info.id
 
-        # Selector often returns an entity_id for the built-in HA agent
-        if raw_lc in ("conversation.home_assistant", "conversation.homeassistant"):
-            return "homeassistant"
-
-        # If it's a conversation entity_id, strip the prefix and try again
-        if raw_lc.startswith("conversation."):
-            raw = raw.split(".", 1)[1].strip()
-
-        # If already a valid AgentManager id, keep it
+        # If already a valid id, keep it
         try:
-            agent_manager.async_get_agent(raw)
-            return raw
+            agent_manager.async_get_agent(selected_name)
+            return selected_name
         except ValueError:
             pass
 
-        # Common built-in id fallback
-        if raw.lower() in ("homeassistant", "home_assistant"):
-            return "homeassistant"
-
-        return raw
+        _LOGGER.error(
+            "[CONFIG_FLOW] Could not resolve agent '%s'. Storing raw value.",
+            selected_name,
+        )
+        return selected_name
 
     def _default_llm_agent_id(self) -> str:
-        """Pick a default non-Home Assistant conversation agent if available."""
+        """Pick the first non-Home Assistant agent ULID if available."""
         agent_manager = conversation.get_agent_manager(self.hass)
-        for info in agent_manager.async_get_agent_info():
-            if info.id != conversation.const.HOME_ASSISTANT_AGENT:
-                return info.id
-        return conversation.const.HOME_ASSISTANT_AGENT
+        infos = agent_manager.async_get_agent_info()
+
+        if not infos:
+            return ""
+
+        # Prefer any agent that is NOT named "Home Assistant"
+        for info in infos:
+            if info.name != "Home Assistant":
+                return info.name
+
+        # Fallback to first agent name
+        return infos[0].name
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Handle the initial step."""
@@ -152,36 +154,42 @@ class OptionsFlow(config_entries.OptionsFlow):
         self._options.update(dict(config_entry.options))
 
     def _resolve_selected_agent_id(self, value: Any) -> str:
-        """Resolve selector value (agent id or conversation entity_id) to an AgentManager agent id."""
+        """Resolve selected display name to AgentManager ULID."""
         agent_manager = conversation.get_agent_manager(self.hass)
+        selected_name = str(value).strip()
 
-        raw = str(value).strip()
-        raw_lc = raw.lower()
+        for info in agent_manager.async_get_agent_info():
+            if info.name == selected_name:
+                return info.id
 
-        if raw_lc in ("conversation.home_assistant", "conversation.homeassistant"):
-            return "homeassistant"
-
-        if raw_lc.startswith("conversation."):
-            raw = raw.split(".", 1)[1].strip()
-
+        # If already a valid id, keep it
         try:
-            agent_manager.async_get_agent(raw)
-            return raw
+            agent_manager.async_get_agent(selected_name)
+            return selected_name
         except ValueError:
             pass
 
-        if raw.lower() in ("homeassistant", "home_assistant"):
-            return "homeassistant"
-
-        return raw
+        _LOGGER.error(
+            "[CONFIG_FLOW] Could not resolve agent '%s'. Storing raw value.",
+            selected_name,
+        )
+        return selected_name
 
     def _default_llm_agent_id(self) -> str:
-        """Pick a default non-Home Assistant conversation agent if available."""
+        """Pick the first non-Home Assistant agent ULID if available."""
         agent_manager = conversation.get_agent_manager(self.hass)
-        for info in agent_manager.async_get_agent_info():
-            if info.id != conversation.const.HOME_ASSISTANT_AGENT:
-                return info.id
-        return conversation.const.HOME_ASSISTANT_AGENT
+        infos = agent_manager.async_get_agent_info()
+
+        if not infos:
+            return ""
+
+        # Prefer any agent that is NOT named "Home Assistant"
+        for info in infos:
+            if info.name != "Home Assistant":
+                return info.name
+
+        # Fallback to first agent name
+        return infos[0].name
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
