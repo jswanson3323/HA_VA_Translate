@@ -1,0 +1,3 @@
+rebuild_dialog_catalog:
+  name: Rebuild Dialog Catalog
+  description: Reload dialog bypass phrases from configured YAML and optional automation conversation triggers.

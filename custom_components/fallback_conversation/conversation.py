@@ -15,8 +15,12 @@ from home_assistant_intents import get_languages
 
 from .catalog import async_get_exposed_catalog
 from .const import (
+    CONF_DIALOG_BYPASS_MIN_SCORE,
     CONF_DEBUG_LEVEL,
+    CONF_ENABLE_DIALOG_BYPASS,
     CONF_FALLBACK_AGENT,
+    DEFAULT_DIALOG_BYPASS_MIN_SCORE,
+    DEFAULT_ENABLE_DIALOG_BYPASS,
     CONF_PRIMARY_AGENT,
     DEBUG_LEVEL_LOW_DEBUG,
     DEBUG_LEVEL_NO_DEBUG,
@@ -158,8 +162,29 @@ class FallbackConversationAgent(
         try:
             catalog = await async_get_exposed_catalog(self.hass, assistant="conversation")
             items = await catalog.async_get_items()
+            entry_data = self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id, {})
+            dialog_phrases = entry_data.get("dialog_phrases", [])
+            enable_dialog_bypass = self.entry.options.get(
+                CONF_ENABLE_DIALOG_BYPASS,
+                self.entry.data.get(CONF_ENABLE_DIALOG_BYPASS, DEFAULT_ENABLE_DIALOG_BYPASS),
+            )
+            dialog_bypass_min_score = float(
+                self.entry.options.get(
+                    CONF_DIALOG_BYPASS_MIN_SCORE,
+                    self.entry.data.get(
+                        CONF_DIALOG_BYPASS_MIN_SCORE,
+                        DEFAULT_DIALOG_BYPASS_MIN_SCORE,
+                    ),
+                )
+            )
 
-            t_res = translate_to_action(user_input.text, items)
+            t_res = translate_to_action(
+                user_input.text,
+                items,
+                dialog_phrases=dialog_phrases,
+                enable_dialog_bypass=bool(enable_dialog_bypass),
+                dialog_bypass_min_score=dialog_bypass_min_score,
+            )
 
             if t_res.handled and t_res.plan:
                 plan = t_res.plan

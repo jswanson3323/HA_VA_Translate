@@ -13,24 +13,39 @@ from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.components import conversation
 from homeassistant.helpers.selector import (
+    BooleanSelector,
+    BooleanSelectorConfig,
     ConversationAgentSelector,
     ConversationAgentSelectorConfig,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
     SelectSelector,
     SelectSelectorConfig,
     SelectOptionDict,
     SelectSelectorMode,
+    TextSelector,
+    TextSelectorConfig,
 )
 
 from .const import (
     CONF_DEBUG_LEVEL,
+    CONF_DIALOG_BYPASS_MIN_SCORE,
+    CONF_DIALOG_YAML_PATH,
+    CONF_ENABLE_DIALOG_BYPASS,
     CONF_PRIMARY_AGENT,
     CONF_FALLBACK_AGENT,
+    CONF_INCLUDE_CONVERSATION_TRIGGER_SCAN,
     DEBUG_LEVEL_NO_DEBUG,
     DEBUG_LEVEL_LOW_DEBUG,
     DEBUG_LEVEL_VERBOSE_DEBUG,
     DOMAIN,
     DEFAULT_NAME,
     DEFAULT_DEBUG_LEVEL,
+    DEFAULT_ENABLE_DIALOG_BYPASS,
+    DEFAULT_DIALOG_BYPASS_MIN_SCORE,
+    DEFAULT_DIALOG_YAML_PATH,
+    DEFAULT_INCLUDE_CONVERSATION_TRIGGER_SCAN,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -279,4 +294,51 @@ class OptionsFlow(config_entries.OptionsFlow):
                 description={"suggested_value": options.get(CONF_FALLBACK_AGENT, llm_default)},
                 default=llm_default,
             ): ConversationAgentSelector(ConversationAgentSelectorConfig()),
+            vol.Required(
+                CONF_ENABLE_DIALOG_BYPASS,
+                description={
+                    "suggested_value": options.get(
+                        CONF_ENABLE_DIALOG_BYPASS,
+                        DEFAULT_ENABLE_DIALOG_BYPASS,
+                    )
+                },
+                default=DEFAULT_ENABLE_DIALOG_BYPASS,
+            ): BooleanSelector(BooleanSelectorConfig()),
+            vol.Required(
+                CONF_DIALOG_BYPASS_MIN_SCORE,
+                description={
+                    "suggested_value": options.get(
+                        CONF_DIALOG_BYPASS_MIN_SCORE,
+                        DEFAULT_DIALOG_BYPASS_MIN_SCORE,
+                    )
+                },
+                default=DEFAULT_DIALOG_BYPASS_MIN_SCORE,
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=0,
+                    max=1,
+                    step=0.01,
+                    mode=NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Required(
+                CONF_DIALOG_YAML_PATH,
+                description={
+                    "suggested_value": options.get(
+                        CONF_DIALOG_YAML_PATH,
+                        DEFAULT_DIALOG_YAML_PATH,
+                    )
+                },
+                default=DEFAULT_DIALOG_YAML_PATH,
+            ): TextSelector(TextSelectorConfig()),
+            vol.Required(
+                CONF_INCLUDE_CONVERSATION_TRIGGER_SCAN,
+                description={
+                    "suggested_value": options.get(
+                        CONF_INCLUDE_CONVERSATION_TRIGGER_SCAN,
+                        DEFAULT_INCLUDE_CONVERSATION_TRIGGER_SCAN,
+                    )
+                },
+                default=DEFAULT_INCLUDE_CONVERSATION_TRIGGER_SCAN,
+            ): BooleanSelector(BooleanSelectorConfig()),
         }

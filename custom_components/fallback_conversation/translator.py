@@ -66,6 +66,10 @@ def _looks_like_command(s: str) -> bool:
     return bool(re.match(r"^(turn|switch|toggle|set|increase|decrease)\b", s))
 
 
+def _looks_like_dialog_candidate(s: str) -> bool:
+    return bool(re.match(r"^(turn|switch|toggle|set|start)\b", s))
+
+
 def _apply_confusions(s: str) -> str:
     for pattern, repl in CONFUSION_MAP:
         s = re.sub(pattern, repl, s)
@@ -256,10 +260,64 @@ def _parse_action(s: str):
     return None
 
 
+def _dialog_target_from_command(s: str) -> str:
+    parsed = _parse_action(s)
+    if not parsed:
+        return s
+    if parsed[0] in ("on", "off", "toggle", "set"):
+        return _norm(parsed[1])
+    return s
+
+
+def _should_bypass_dialog(
+    normalized_text: str,
+    dialog_phrases: Iterable[str],
+    min_score: float,
+) -> tuple[bool, str, float, str]:
+    if not _looks_like_dialog_candidate(normalized_text):
+        return False, "", 0.0, ""
+
+    utterance_target = _dialog_target_from_command(normalized_text)
+
+    best_score = 0.0
+    best_phrase = ""
+    for phrase in dialog_phrases:
+        phrase_n = _norm(phrase)
+        if not phrase_n:
+            continue
+
+        phrase_target = _dialog_target_from_command(phrase_n)
+
+        if (
+            phrase_n in normalized_text
+            or normalized_text in phrase_n
+            or phrase_target in utterance_target
+            or utterance_target in phrase_target
+        ):
+            return True, "contains", 1.0, phrase_n
+
+        score = max(
+            _token_score(normalized_text, phrase_n),
+            _token_score(utterance_target, phrase_n),
+            _token_score(utterance_target, phrase_target),
+        )
+        if score > best_score:
+            best_score = score
+            best_phrase = phrase_n
+
+    if best_score >= min_score:
+        return True, "fuzzy", best_score, best_phrase
+
+    return False, "", best_score, best_phrase
+
+
 def translate_to_action(
     text: str,
     catalog: Iterable[EntityCatalogItem],
     satellite_area: Optional[str] = None,
+    dialog_phrases: Optional[Iterable[str]] = None,
+    enable_dialog_bypass: bool = True,
+    dialog_bypass_min_score: float = 0.60,
 ) -> TranslateResult:
     if not text:
         return TranslateResult(handled=False, reason="no_text")
@@ -270,6 +328,26 @@ def translate_to_action(
         return TranslateResult(handled=False, reason="not_command", normalized_text=normalized)
 
     normalized = _apply_confusions(normalized)
+
+    if enable_dialog_bypass and dialog_phrases:
+        should_bypass, bypass_kind, bypass_score, bypass_phrase = _should_bypass_dialog(
+            normalized,
+            dialog_phrases,
+            min_score=dialog_bypass_min_score,
+        )
+        if should_bypass:
+            _LOGGER.debug(
+                "Dialog bypass triggered (%s): phrase='%s' score=%.3f normalized='%s'",
+                bypass_kind,
+                bypass_phrase,
+                bypass_score,
+                normalized,
+            )
+            return TranslateResult(
+                handled=False,
+                reason=f"dialog_bypass_{bypass_kind}",
+                normalized_text=normalized,
+            )
 
     parsed = _parse_action(normalized)
     if not parsed:
