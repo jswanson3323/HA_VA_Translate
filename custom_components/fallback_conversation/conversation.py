@@ -28,11 +28,29 @@ from .const import (
     DOMAIN,
     STRANGE_ERROR_RESPONSES,
 )
-from .translator import translate_to_action
+from .translator import ActionPlan, translate_to_action
 
 _LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+
+def _action_speech_from_plan(plan: ActionPlan) -> str:
+    entity = plan.entity_id.replace("_", " ")
+    if "." in entity:
+        entity = entity.split(".", 1)[1]
+
+    if plan.service == "turn_on":
+        return f"Turned on {entity}."
+    if plan.service == "turn_off":
+        return f"Turned off {entity}."
+    if plan.service == "toggle":
+        return f"Toggled {entity}."
+    if plan.service == "set_temperature" and plan.value is not None:
+        temp = int(plan.value) if float(plan.value).is_integer() else plan.value
+        return f"Set {entity} to {temp} degrees."
+
+    return f"Ran {plan.service} on {entity}."
 
 
 async def async_setup_entry(
@@ -206,7 +224,7 @@ class FallbackConversationAgent(
                 )
 
                 intent_response = intent.IntentResponse(language=user_input.language)
-                intent_response.async_set_speech("Done.")
+                intent_response.async_set_speech(_action_speech_from_plan(plan))
 
                 return conversation.ConversationResult(
                     conversation_id=user_input.conversation_id,
