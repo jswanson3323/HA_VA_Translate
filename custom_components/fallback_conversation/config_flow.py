@@ -13,39 +13,24 @@ from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.components import conversation
 from homeassistant.helpers.selector import (
-    BooleanSelector,
-    BooleanSelectorConfig,
     ConversationAgentSelector,
     ConversationAgentSelectorConfig,
-    NumberSelector,
-    NumberSelectorConfig,
-    NumberSelectorMode,
     SelectSelector,
     SelectSelectorConfig,
     SelectOptionDict,
     SelectSelectorMode,
-    TextSelector,
-    TextSelectorConfig,
 )
 
 from .const import (
     CONF_DEBUG_LEVEL,
-    CONF_DIALOG_BYPASS_MIN_SCORE,
-    CONF_DIALOG_YAML_PATH,
-    CONF_ENABLE_DIALOG_BYPASS,
     CONF_PRIMARY_AGENT,
     CONF_FALLBACK_AGENT,
-    CONF_INCLUDE_CONVERSATION_TRIGGER_SCAN,
     DEBUG_LEVEL_NO_DEBUG,
     DEBUG_LEVEL_LOW_DEBUG,
     DEBUG_LEVEL_VERBOSE_DEBUG,
     DOMAIN,
     DEFAULT_NAME,
     DEFAULT_DEBUG_LEVEL,
-    DEFAULT_ENABLE_DIALOG_BYPASS,
-    DEFAULT_DIALOG_BYPASS_MIN_SCORE,
-    DEFAULT_DIALOG_YAML_PATH,
-    DEFAULT_INCLUDE_CONVERSATION_TRIGGER_SCAN,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -84,58 +69,13 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 2
 
-    def _resolve_selected_agent_id(self, value: Any) -> str:
-        """Resolve selector value (entity_id or name) to AgentManager ULID."""
-        agent_manager = conversation.get_agent_manager(self.hass)
-        raw = str(value).strip()
-
-        # If already a valid AgentManager id, return it
-        try:
-            agent_manager.async_get_agent(raw)
-            return raw
-        except ValueError:
-            pass
-
-        # If selector returned entity_id like 'conversation.home_assistant'
-        if raw.startswith("conversation."):
-            for info in agent_manager.async_get_agent_info():
-                try:
-                    agent = agent_manager.async_get_agent(info.id)
-                except Exception:
-                    continue
-
-                if (
-                    hasattr(agent, "registry_entry")
-                    and agent.registry_entry.entity_id == raw
-                ):
-                    return info.id
-
-        # Fallback: match by display name
-        for info in agent_manager.async_get_agent_info():
-            if info.name == raw:
-                return info.id
-
-        _LOGGER.error(
-            "[CONFIG_FLOW] Could not resolve agent '%s'. Storing raw value.",
-            raw,
-        )
-        return raw
-
     def _default_llm_agent_id(self) -> str:
-        """Pick the first non-Home Assistant agent ULID if available."""
+        """Pick a default non-Home Assistant conversation agent if available."""
         agent_manager = conversation.get_agent_manager(self.hass)
-        infos = agent_manager.async_get_agent_info()
-
-        if not infos:
-            return ""
-
-        # Prefer any agent that is NOT named "Home Assistant"
-        for info in infos:
-            if info.name != "Home Assistant":
-                return info.name
-
-        # Fallback to first agent name
-        return infos[0].name
+        for info in agent_manager.async_get_agent_info():
+            if info.id != conversation.const.HOME_ASSISTANT_AGENT:
+                return info.id
+        return conversation.const.HOME_ASSISTANT_AGENT
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Handle the initial step."""
@@ -151,16 +91,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     primary_default=ha_agent_id,
                     fallback_default=llm_default,
                 ),
-            )
-
-        # Resolve and store usable AgentManager ids
-        if CONF_PRIMARY_AGENT in user_input:
-            user_input[CONF_PRIMARY_AGENT] = self._resolve_selected_agent_id(
-                user_input[CONF_PRIMARY_AGENT]
-            )
-        if CONF_FALLBACK_AGENT in user_input:
-            user_input[CONF_FALLBACK_AGENT] = self._resolve_selected_agent_id(
-                user_input[CONF_FALLBACK_AGENT]
             )
 
         return self.async_create_entry(
@@ -183,74 +113,19 @@ class OptionsFlow(config_entries.OptionsFlow):
         self._options = dict(config_entry.data)
         self._options.update(dict(config_entry.options))
 
-    def _resolve_selected_agent_id(self, value: Any) -> str:
-        """Resolve selector value (entity_id or name) to AgentManager ULID."""
-        agent_manager = conversation.get_agent_manager(self.hass)
-        raw = str(value).strip()
-
-        # If already a valid AgentManager id, return it
-        try:
-            agent_manager.async_get_agent(raw)
-            return raw
-        except ValueError:
-            pass
-
-        # If selector returned entity_id like 'conversation.home_assistant'
-        if raw.startswith("conversation."):
-            for info in agent_manager.async_get_agent_info():
-                try:
-                    agent = agent_manager.async_get_agent(info.id)
-                except Exception:
-                    continue
-
-                if (
-                    hasattr(agent, "registry_entry")
-                    and agent.registry_entry.entity_id == raw
-                ):
-                    return info.id
-
-        # Fallback: match by display name
-        for info in agent_manager.async_get_agent_info():
-            if info.name == raw:
-                return info.id
-
-        _LOGGER.error(
-            "[CONFIG_FLOW] Could not resolve agent '%s'. Storing raw value.",
-            raw,
-        )
-        return raw
-
     def _default_llm_agent_id(self) -> str:
-        """Pick the first non-Home Assistant agent ULID if available."""
+        """Pick a default non-Home Assistant conversation agent if available."""
         agent_manager = conversation.get_agent_manager(self.hass)
-        infos = agent_manager.async_get_agent_info()
-
-        if not infos:
-            return ""
-
-        # Prefer any agent that is NOT named "Home Assistant"
-        for info in infos:
-            if info.name != "Home Assistant":
-                return info.name
-
-        # Fallback to first agent name
-        return infos[0].name
+        for info in agent_manager.async_get_agent_info():
+            if info.id != conversation.const.HOME_ASSISTANT_AGENT:
+                return info.id
+        return conversation.const.HOME_ASSISTANT_AGENT
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Manage the options."""
         if user_input is not None:
-            # Resolve and store usable AgentManager ids
-            if CONF_PRIMARY_AGENT in user_input:
-                user_input[CONF_PRIMARY_AGENT] = self._resolve_selected_agent_id(
-                    user_input[CONF_PRIMARY_AGENT]
-                )
-            if CONF_FALLBACK_AGENT in user_input:
-                user_input[CONF_FALLBACK_AGENT] = self._resolve_selected_agent_id(
-                    user_input[CONF_FALLBACK_AGENT]
-                )
-
             self._options.update(user_input)
             return self.async_create_entry(
                 title=user_input.get(CONF_NAME, DEFAULT_NAME),
@@ -294,51 +169,4 @@ class OptionsFlow(config_entries.OptionsFlow):
                 description={"suggested_value": options.get(CONF_FALLBACK_AGENT, llm_default)},
                 default=llm_default,
             ): ConversationAgentSelector(ConversationAgentSelectorConfig()),
-            vol.Required(
-                CONF_ENABLE_DIALOG_BYPASS,
-                description={
-                    "suggested_value": options.get(
-                        CONF_ENABLE_DIALOG_BYPASS,
-                        DEFAULT_ENABLE_DIALOG_BYPASS,
-                    )
-                },
-                default=DEFAULT_ENABLE_DIALOG_BYPASS,
-            ): BooleanSelector(BooleanSelectorConfig()),
-            vol.Required(
-                CONF_DIALOG_BYPASS_MIN_SCORE,
-                description={
-                    "suggested_value": options.get(
-                        CONF_DIALOG_BYPASS_MIN_SCORE,
-                        DEFAULT_DIALOG_BYPASS_MIN_SCORE,
-                    )
-                },
-                default=DEFAULT_DIALOG_BYPASS_MIN_SCORE,
-            ): NumberSelector(
-                NumberSelectorConfig(
-                    min=0,
-                    max=1,
-                    step=0.01,
-                    mode=NumberSelectorMode.BOX,
-                )
-            ),
-            vol.Required(
-                CONF_DIALOG_YAML_PATH,
-                description={
-                    "suggested_value": options.get(
-                        CONF_DIALOG_YAML_PATH,
-                        DEFAULT_DIALOG_YAML_PATH,
-                    )
-                },
-                default=DEFAULT_DIALOG_YAML_PATH,
-            ): TextSelector(TextSelectorConfig()),
-            vol.Required(
-                CONF_INCLUDE_CONVERSATION_TRIGGER_SCAN,
-                description={
-                    "suggested_value": options.get(
-                        CONF_INCLUDE_CONVERSATION_TRIGGER_SCAN,
-                        DEFAULT_INCLUDE_CONVERSATION_TRIGGER_SCAN,
-                    )
-                },
-                default=DEFAULT_INCLUDE_CONVERSATION_TRIGGER_SCAN,
-            ): BooleanSelector(BooleanSelectorConfig()),
         }

@@ -18,19 +18,11 @@
           "data": {
             "debug_level": "Debug Level",
             "primary_agent": "Primary Conversation Agent",
-            "fallback_agent": "Fallback Conversation Agent",
-            "enable_dialog_bypass": "Enable Dialog Bypass",
-            "dialog_bypass_min_score": "Dialog Bypass Min Score",
-            "dialog_yaml_path": "Dialog Phrase YAML Path",
-            "include_conversation_trigger_scan": "Scan Conversation Triggers"
+            "fallback_agent": "Fallback Conversation Agent"
           },
           "data_description": {
             "primary_agent": "The first conversation agent that all requests will go to. \nRecommended to be the fastest agent you have that is also local-only, even if it isn't very good at responding.",
-            "fallback_agent": "The backup conversation agent incase the primary agent is unable to handle the request. \nThis is where you may use an cloud service or a very slow conversation agent.",
-            "enable_dialog_bypass": "If enabled, phrases matching your automation dialog catalog bypass translator handling.",
-            "dialog_bypass_min_score": "Fuzzy score threshold for dialog bypass phrase matching (0.0-1.0).",
-            "dialog_yaml_path": "Path to dialog phrases YAML file, default: /config/fallback_conversation/dialog_phrases.yaml",
-            "include_conversation_trigger_scan": "If enabled, scan conversation triggers from automation YAML and blueprints."
+            "fallback_agent": "The backup conversation agent incase the primary agent is unable to handle the request. \nThis is where you may use an cloud service or a very slow conversation agent."
           }
         }
       }
