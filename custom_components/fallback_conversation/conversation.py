@@ -113,9 +113,12 @@ class FallbackConversationAgent(conversation.ConversationEntity, conversation.Ab
     async def async_added_to_hass(self) -> None:
         """When entity is added to Home Assistant."""
         await super().async_added_to_hass()
-        assist_pipeline.async_migrate_engine(
-            self.hass, "conversation", self.entry.entry_id, self.entity_id
-        )
+        if hasattr(assist_pipeline, "async_migrate_engine"):
+            assist_pipeline.async_migrate_engine(
+                self.hass, "conversation", self.entry.entry_id, self.entity_id
+            )
+        else:
+            _LOGGER.debug("assist_pipeline.async_migrate_engine not available; skipping migration")
         conversation.async_set_agent(self.hass, self.entry, self)
         self.entry.async_on_unload(
             self.entry.add_update_listener(self._async_entry_update_listener)
@@ -244,8 +247,8 @@ class FallbackConversationAgent(conversation.ConversationEntity, conversation.Ab
             err,
         )
         result = conversation.ConversationResult(
-            conversation_id=result.conversation_id,
-            response=intent_response
+            conversation_id=(result.conversation_id if result is not None else user_input.conversation_id),
+            response=intent_response,
         )
 
         return result
