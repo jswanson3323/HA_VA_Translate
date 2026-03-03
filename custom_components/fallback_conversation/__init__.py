@@ -7,7 +7,7 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, Platform
-from homeassistant.core import Event, HomeAssistant, ServiceCall
+from homeassistant.core import Event, HomeAssistant, ServiceCall, callback
 from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN, SERVICE_REBUILD_DIALOG_CATALOG
@@ -60,13 +60,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await _async_rebuild_entry_dialog_catalog(hass, entry)
     else:
 
-        async def _async_started_reload(_event: Event) -> None:
-            _LOGGER.debug("Home Assistant started; rebuilding dialog catalog for %s", entry.entry_id)
+        async def _async_started_reload(event: Event) -> None:
+            _LOGGER.debug(
+                "Home Assistant started; rebuilding dialog catalog for %s", entry.entry_id
+            )
             await _async_rebuild_entry_dialog_catalog(hass, entry)
+
+        @callback
+        def _handle_started(event: Event) -> None:
+            hass.async_create_task(_async_started_reload(event))
 
         unsub_started = hass.bus.async_listen_once(
             EVENT_HOMEASSISTANT_STARTED,
-            lambda event: hass.loop.call_soon_threadsafe(lambda: hass.async_create_task(_async_started_reload(event))),
+            _handle_started,
         )
         entry_data[_DATA_UNSUBS].append(unsub_started)
 
@@ -75,16 +81,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "automation_reloaded received; rebuilding dialog catalog for %s",
             entry.entry_id,
         )
-        hass.loop.call_soon_threadsafe(lambda: hass.async_create_task(_async_rebuild_entry_dialog_catalog(hass, entry)))
+        hass.async_create_task(_async_rebuild_entry_dialog_catalog(hass, entry))
 
     unsub_automation = hass.bus.async_listen(_EVENT_AUTOMATION_RELOADED, _automation_reloaded)
     entry_data[_DATA_UNSUBS].append(unsub_automation)
 
     if not hass.data[DOMAIN].get(_DATA_SERVICE_REGISTERED):
+        async def _handle_rebuild_service(call: ServiceCall) -> None:
+            await _async_handle_rebuild_service(hass, call)
+
         hass.services.async_register(
             DOMAIN,
             SERVICE_REBUILD_DIALOG_CATALOG,
-            lambda call: _async_handle_rebuild_service(hass, call),
+            _handle_rebuild_service,
         )
         hass.data[DOMAIN][_DATA_SERVICE_REGISTERED] = True
 

@@ -35,6 +35,9 @@ _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
+DEFAULT_AGENT_SENTINEL = "__DEFAULT_HOME_ASSISTANT_AGENT__"
+
+
 def _action_speech_from_plan(plan: ActionPlan) -> str:
     entity = plan.entity_id.replace("_", " ")
     if "." in entity:
@@ -153,6 +156,18 @@ class FallbackConversationAgent(
 
         raw_s = str(raw)
 
+        raw_l = raw_s.strip().lower()
+
+        # Special-case: use AgentManager.default_agent for the built-in Home Assistant agent
+        if raw_l in {
+            "conversation.home_assistant",
+            "conversation.homeassistant",
+            "home_assistant",
+            "homeassistant",
+            getattr(conversation.const, "HOME_ASSISTANT_AGENT", "homeassistant").lower(),
+        }:
+            return DEFAULT_AGENT_SENTINEL
+
         # Already a real agent id
         if raw_s in id_to_name:
             return raw_s
@@ -162,16 +177,10 @@ class FallbackConversationAgent(
             return entity_id_to_id[raw_s]
 
         # Best-effort: match by display name (case-insensitive)
-        raw_l = raw_s.strip().lower()
         for aid, name in id_to_name.items():
             if name.strip().lower() == raw_l:
                 return aid
 
-        # Convenience: allow 'homeassistant' / constant to mean the Home Assistant agent
-        if raw_l in {"homeassistant", conversation.const.HOME_ASSISTANT_AGENT}:
-            for aid, name in id_to_name.items():
-                if name.strip().lower() in {"home assistant", "homeassistant"}:
-                    return aid
 
         return None
 
@@ -225,7 +234,11 @@ class FallbackConversationAgent(
         )
         debug_enabled = debug_level != DEBUG_LEVEL_NO_DEBUG
 
-        primary_agent_id = self._resolve_agent_id(primary_raw, agent_manager, id_to_name, entity_id_to_id)
+        primary_agent_id = (
+            self._resolve_agent_id(primary_raw, agent_manager, id_to_name, entity_id_to_id)
+            if primary_raw is not None
+            else DEFAULT_AGENT_SENTINEL
+        )
         fallback_agent_id = self._resolve_agent_id(fallback_raw, agent_manager, id_to_name, entity_id_to_id)
 
         if debug_enabled:
@@ -360,7 +373,7 @@ class FallbackConversationAgent(
         agent_id: str,
         agent_name: str,
         user_input: conversation.ConversationInput,
-        debug_level: int,
+        debug_level: str,
         previous_result: conversation.ConversationResult | None,
     ) -> conversation.ConversationResult:
         """Process a specified agent."""
@@ -370,7 +383,7 @@ class FallbackConversationAgent(
         # DEBUG: show what we're about to request
         try:
             infos = agent_manager.async_get_agent_info()
-            _LOGGER.error(
+            _LOGGER.debug(
                 "[DEBUG] Attempting async_get_agent(%r) resolved from %r. Available ids=%s",
                 agent_id,
                 original_agent_id,
@@ -381,15 +394,15 @@ class FallbackConversationAgent(
 
         # SAFETY: do not crash if agent does not exist
         try:
-            if agent_id == DEFAULT_SENTINEL:
+            if agent_id == DEFAULT_AGENT_SENTINEL:
                 agent = getattr(agent_manager, "default_agent", None)
                 if agent is None:
                     raise ValueError("Default Home Assistant agent not available")
             else:
                 agent = agent_manager.async_get_agent(agent_id)
-        except ValueError:
-            _LOGGER.error(
-                "[DEBUG] Agent '%s' not found. Skipping this agent.",
+        except (KeyError, ValueError):
+            _LOGGER.warning(
+                "[ROUTER] Agent '%s' not found. Skipping this agent.",
                 agent_id,
             )
 

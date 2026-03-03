@@ -53,13 +53,13 @@ class EntityCatalog:
     async def async_start(self) -> None:
         """Start listeners."""
         # Always do an initial build
-        await self._async_build()
+        await self.async_rebuild(force=True)
 
         # --- entity registry updates ---
         # HA's entity registry listener APIs have changed a few times.
         # We support multiple variants and fall back to the event bus.
         try:
-            ent_reg = entity_registry.async_get(self.hass)
+            ent_reg = er.async_get(self.hass)
 
             # Newer helper (if present)
             if hasattr(er, "async_track_entity_registry_updated_event"):
