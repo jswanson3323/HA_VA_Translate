@@ -234,7 +234,7 @@ class FallbackConversationAgent(conversation.ConversationEntity, conversation.Ab
             all_results.append(result)
 
         intent_response = intent.IntentResponse(language=user_input.language)
-        err = "Complete fallback failure. No Conversation Agent was able to respond."
+        err = "Oops. I have fallen and I cannot get up. Complete fallback failure. No Conversation Agent was able to respond."
         if 1 == 1:
             for res in all_results:
                 r = res.response.speech['plain']
