@@ -114,7 +114,12 @@ class FallbackConversationAgent(
         await super().async_added_to_hass()
 
         # Assist pipeline migration helper is HA-version dependent.
-        if hasattr(assist_pipeline, "async_migrate_engine"):
+        migrate = getattr(assist_pipeline, "async_migrate_engine", None)
+        if migrate:
+            try:
+                migrate(self.hass, "conversation", self.entry.entry_id, self.entity_id)
+            except Exception as err:
+                _LOGGER.debug("assist_pipeline async_migrate_engine failed: %s", err)
 
         conversation.async_set_agent(self.hass, self.entry, self)
         self.entry.async_on_unload(
@@ -360,6 +365,23 @@ class FallbackConversationAgent(
             )
         except Exception:
             _LOGGER.exception("[DEBUG] Failed to inspect AgentManager before lookup")
+
+
+        # Special-case: built-in Home Assistant agent isn't a ConversationEntity and may not be in async_get_agent()
+        if agent_id in ("conversation.home_assistant", "homeassistant", getattr(conversation.const, "HOME_ASSISTANT_AGENT", "homeassistant")):
+            agent = getattr(agent_manager, "default_agent", None)
+            if agent is None:
+                _LOGGER.error("[DEBUG] default_agent is missing on AgentManager; cannot use Home Assistant agent")
+            else:
+                result = await agent.async_process(user_input)
+                # Ensure speech[plain] metadata exists
+                if "plain" not in result.response.speech:
+                    result.response.speech["plain"] = {"speech": ""}
+                r = result.response.speech["plain"].get("speech", "")
+                result.response.speech["plain"]["original_speech"] = r
+                result.response.speech["plain"]["agent_name"] = agent_name
+                result.response.speech["plain"]["agent_id"] = agent_id
+                return result
 
         # SAFETY: do not crash if agent does not exist
         try:
