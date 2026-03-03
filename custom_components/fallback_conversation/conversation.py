@@ -212,10 +212,18 @@ class FallbackConversationAgent(
         id_to_name, entity_id_to_id = self._build_agent_maps(agent_manager)
 
         # Values stored from the config UI are usually conversation entity_ids like
-        # 'conversation.home_assistant' / 'conversation.jarvis'. AgentManager expects
-        # its internal agent id (ULID), so we resolve before calling it.
+        # Values stored by config flow may be an entity_id like 'conversation.home_assistant'
+        # or a friendly name; AgentManager expects an internal agent id (ULID).
         primary_raw = self.entry.options.get(CONF_PRIMARY_AGENT, self.entry.data.get(CONF_PRIMARY_AGENT))
         fallback_raw = self.entry.options.get(CONF_FALLBACK_AGENT, self.entry.data.get(CONF_FALLBACK_AGENT))
+
+        # Debug settings
+        debug_level = (
+            self.entry.options.get(CONF_DEBUG_LEVEL)
+            if self.entry.options.get(CONF_DEBUG_LEVEL) is not None
+            else self.entry.data.get(CONF_DEBUG_LEVEL, DEBUG_LEVEL_NO_DEBUG)
+        )
+        debug_enabled = debug_level != DEBUG_LEVEL_NO_DEBUG
 
         primary_agent_id = self._resolve_agent_id(primary_raw, agent_manager, id_to_name, entity_id_to_id)
         fallback_agent_id = self._resolve_agent_id(fallback_raw, agent_manager, id_to_name, entity_id_to_id)
@@ -227,12 +235,6 @@ class FallbackConversationAgent(
             )
 
         agents: list[str] = [a for a in (primary_agent_id, fallback_agent_id) if a]
-
-        debug_level = (
-            self.entry.options.get(CONF_DEBUG_LEVEL)
-            if self.entry.options.get(CONF_DEBUG_LEVEL) is not None
-            else self.entry.data.get(CONF_DEBUG_LEVEL, DEBUG_LEVEL_NO_DEBUG)
-        )
 
         if user_input.conversation_id is None:
             user_input.conversation_id = ulid.ulid()
