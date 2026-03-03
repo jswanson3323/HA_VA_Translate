@@ -212,29 +212,54 @@ class FallbackConversationAgent(conversation.ConversationEntity, conversation.Ab
         except Exception as ex:  # noqa: BLE001
             _LOGGER.exception("Translation layer error (falling back to agents): %s", ex)
 
-        all_results = []
-        result = None
-        for agent_id in agents:
-            agent_name = "[unknown]"
-            if agent_id in agent_names:
-                agent_name = agent_names[agent_id]
-            else:
-                _LOGGER.warning("agent_name not found for agent_id %s", agent_id)
+        # all_results = []
+        # result = None
+        # for agent_id in agents:
+        #     agent_name = "[unknown]"
+        #     if agent_id in agent_names:
+        #         agent_name = agent_names[agent_id]
+        #     else:
+        #         _LOGGER.warning("agent_name not found for agent_id %s", agent_id)
 
-            result = await self._async_process_agent(
-                agent_manager,
-                agent_id,
-                agent_name,
-                user_input,
-                debug_level,
-                result,
-            )
-            if result.response.response_type != intent.IntentResponseType.ERROR and result.response.speech['plain']['original_speech'].lower() not in STRANGE_ERROR_RESPONSES:
-                return result
-            all_results.append(result)
+        #     result = await self._async_process_agent(
+        #         agent_manager,
+        #         agent_id,
+        #         agent_name,
+        #         user_input,
+        #         debug_level,
+        #         result,
+        #     )
+        #     if result.response.response_type != intent.IntentResponseType.ERROR and result.response.speech['plain']['original_speech'].lower() not in STRANGE_ERROR_RESPONSES:
+        #         return result
+        #     all_results.append(result)
+
+        all_results = []
+
+        for agent_ref in agents:
+            if not agent_ref:
+                all_results.append(("UNKNOWN", "INVALID_AGENT_REF", "Agent ref was None/empty"))
+                continue
+
+            try:
+                result = await self._async_process_agent(..., agent_ref, ...)
+                # normal path: capture speech
+                r = result.response.speech.get("plain", {})
+                all_results.append((
+                    r.get("agent_name", "UNKNOWN"),
+                    r.get("agent_id", str(agent_ref)),
+                    r.get("original_speech", r.get("speech", "<no speech>")),
+                ))
+
+                # your existing “success if not ERROR” check here...
+
+            except Exception as e:
+                all_results.append(("UNKNOWN", str(agent_ref), f"Exception: {type(e).__name__}: {e}"))
+                continue        
 
         intent_response = intent.IntentResponse(language=user_input.language)
         err = "Oops. I have fallen and I cannot get up. Complete fallback failure. No Conversation Agent was able to respond."
+        _LOGGER.warning("[ROUTER] agents raw=%s options=%s data=%s",
+                agents, dict(self.entry.options), dict(self.entry.data))
         if 1 == 1:
             for res in all_results:
                 r = res.response.speech['plain']
