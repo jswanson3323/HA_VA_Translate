@@ -84,66 +84,88 @@ class FallbackConversationAgent(
         self, agents_info: list[conversation.AgentInfo]
     ) -> dict[str, str]:
         """Map both agent_id and conversation entity_id to display name."""
-
         agent_manager = conversation.get_agent_manager(self.hass)
 
-        # Snapshot available agents (AgentManager uses internal ids, usually ULIDs)
-        infos = agent_manager.async_get_agent_info()
-        agent_names: dict[str, str] = {info.id: (info.name or "[unknown]") for info in infos}
+        r: dict[str, str] = {}
+        for agent_info in agents_info:
+            # Canonical agent id
+            r[agent_info.id] = agent_info.name
 
-        # Build a resolver that maps:
-        # - internal ids (ULIDs)
-        # - conversation entity_ids (e.g. conversation.home_assistant)
-        # - short entity ids (e.g. home_assistant)
-        # - human names (e.g. "Home Assistant")
-        # -> internal id used by AgentManager
-        id_map: dict[str, str] = {}
-        name_map: dict[str, str] = {}
-
-        for info in infos:
-            internal_id = info.id
-            id_map[internal_id] = internal_id
-
-            # Map registry entity_id (if the agent is an entity-backed agent)
+            # Also map the registered conversation entity id, if available
             try:
-                agent_obj = agent_manager.async_get_agent(internal_id)
-                reg_entry = getattr(agent_obj, "registry_entry", None)
-                ent_id = getattr(reg_entry, "entity_id", None) if reg_entry else None
-                if ent_id:
-                    id_map[ent_id] = internal_id
-                    if ent_id.startswith("conversation."):
-                        id_map[ent_id.split(".", 1)[1]] = internal_id
+                agent = agent_manager.async_get_agent(agent_info.id)
             except Exception:  # noqa: BLE001
-                pass
+                agent = None
 
-            if info.name:
-                name_map[info.name.lower()] = internal_id
+            if agent is not None and hasattr(agent, "registry_entry"):
+                r[agent.registry_entry.entity_id] = agent_info.name
 
-        def _resolve_agent_id(raw: str | None) -> str | None:
-            if not raw:
-                return None
-            raw_s = str(raw).strip()
-            if not raw_s:
-                return None
+            _LOGGER.debug("agent_id %s has name %s", agent_info.id, agent_info.name)
 
-            if raw_s in id_map:
-                return id_map[raw_s]
+        return r
 
-            lower = raw_s.lower()
-            if lower in name_map:
-                return name_map[lower]
+    @property
+    def supported_languages(self) -> list[str]:
+        """Return a list of supported languages."""
+        return get_languages()
 
-            return None
+    async def async_added_to_hass(self) -> None:
+        """When entity is added to Home Assistant."""
+        await super().async_added_to_hass()
 
-        # Read configured agent refs (options override data)
-        primary_raw = self.entry.options.get(CONF_PRIMARY_AGENT) or self.entry.data.get(CONF_PRIMARY_AGENT)
-        fallback_raw = self.entry.options.get(CONF_FALLBACK_AGENT) or self.entry.data.get(CONF_FALLBACK_AGENT)
+        # Assist pipeline migration helper is HA-version dependent.
+        if hasattr(assist_pipeline, "async_migrate_engine"):
+            assist_pipeline.async_migrate_engine(
+                self.hass,
+                "conversation",
+                self.entry.entry_id,
+                self.entity_id,
+            )
 
-        primary_id = _resolve_agent_id(primary_raw)
-        fallback_id = _resolve_agent_id(fallback_raw)
+        conversation.async_set_agent(self.hass, self.entry, self)
+        self.entry.async_on_unload(
+            self.entry.add_update_listener(self._async_entry_update_listener)
+        )
 
-        # Only run agents that we can resolve
-        agents: list[str] = [a for a in (primary_id, fallback_id) if a]
+    async def async_will_remove_from_hass(self) -> None:
+        """When entity will be removed from Home Assistant."""
+        conversation.async_unset_agent(self.hass, self.entry)
+        await super().async_will_remove_from_hass()
+
+    async def _async_entry_update_listener(
+        self, hass: HomeAssistant, entry: ConfigEntry
+    ) -> None:
+        """Handle options update."""
+        self._attr_supported_features = conversation.ConversationEntityFeature.CONTROL
+
+    async def async_process(
+        self, user_input: conversation.ConversationInput
+    ) -> conversation.ConversationResult:
+        """Process a sentence."""
+        agent_manager = conversation.get_agent_manager(self.hass)
+        # DEBUG: log all known AgentManager ids
+        try:
+            infos = agent_manager.async_get_agent_info()
+            _LOGGER.error(
+                "[DEBUG] Available AgentManager ids: %s",
+                [i.id for i in infos],
+            )
+        except Exception:
+            _LOGGER.exception("[DEBUG] Failed to list AgentManager ids")
+        agent_names = self._convert_agent_info_to_dict(
+            agent_manager.async_get_agent_info()
+        )
+
+        primary_agent_id = (
+            self.entry.options.get(CONF_PRIMARY_AGENT)
+            or self.entry.data.get(CONF_PRIMARY_AGENT)
+        )
+        fallback_agent_id = (
+            self.entry.options.get(CONF_FALLBACK_AGENT)
+            or self.entry.data.get(CONF_FALLBACK_AGENT)
+        )
+
+        agents = [a for a in (primary_agent_id, fallback_agent_id) if a]
 
         debug_level = (
             self.entry.options.get(CONF_DEBUG_LEVEL)
@@ -293,23 +315,6 @@ class FallbackConversationAgent(
             )
         except Exception:
             _LOGGER.exception("[DEBUG] Failed to inspect AgentManager before lookup")
-
-
-        # Special-case: built-in Home Assistant agent isn't a ConversationEntity and may not be in async_get_agent()
-        if agent_id in ("conversation.home_assistant", "homeassistant", getattr(conversation.const, "HOME_ASSISTANT_AGENT", "homeassistant")):
-            agent = getattr(agent_manager, "default_agent", None)
-            if agent is None:
-                _LOGGER.error("[DEBUG] default_agent is missing on AgentManager; cannot use Home Assistant agent")
-            else:
-                result = await agent.async_process(user_input)
-                # Ensure speech[plain] metadata exists
-                if "plain" not in result.response.speech:
-                    result.response.speech["plain"] = {"speech": ""}
-                r = result.response.speech["plain"].get("speech", "")
-                result.response.speech["plain"]["original_speech"] = r
-                result.response.speech["plain"]["agent_name"] = agent_name
-                result.response.speech["plain"]["agent_id"] = agent_id
-                return result
 
         # SAFETY: do not crash if agent does not exist
         try:

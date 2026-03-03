@@ -96,11 +96,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         except ValueError:
             pass
 
-        # Special-case built-in Home Assistant agent
-        if raw in ("conversation.home_assistant", "homeassistant"):
-            return getattr(conversation.const, "HOME_ASSISTANT_AGENT", "homeassistant")
-
-        # If selector returned entity_id like 'conversation.<something>'
+        # If selector returned entity_id like 'conversation.home_assistant'
         if raw.startswith("conversation."):
             for info in agent_manager.async_get_agent_info():
                 try:
