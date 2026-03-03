@@ -235,10 +235,7 @@ class FallbackConversationAgent(conversation.ConversationEntity, conversation.Ab
 
         intent_response = intent.IntentResponse(language=user_input.language)
         err = "Complete fallback failure. No Conversation Agent was able to respond."
-        if debug_level == DEBUG_LEVEL_LOW_DEBUG:
-            r = all_results[-1].response.speech['plain']
-            err += f"\n{r.get('agent_name', 'UNKNOWN')} responded with: {r.get('original_speech', r['speech'])}"
-        elif debug_level == DEBUG_LEVEL_VERBOSE_DEBUG:
+        if 1 == 1:
             for res in all_results:
                 r = res.response.speech['plain']
                 err += f"\n{r.get('agent_name', 'UNKNOWN')} responded with: {r.get('original_speech', r['speech'])}"
