@@ -1,6 +1,8 @@
 """Fallback Conversation Agent"""
 from __future__ import annotations
 
+import asyncio
+
 import logging
 
 from homeassistant.config_entries import ConfigEntry
@@ -64,7 +66,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         unsub_started = hass.bus.async_listen_once(
             EVENT_HOMEASSISTANT_STARTED,
-            lambda event: hass.async_create_task(_async_started_reload(event)),
+            lambda event: hass.loop.call_soon_threadsafe(lambda: hass.async_create_task(_async_started_reload(event))),
         )
         entry_data[_DATA_UNSUBS].append(unsub_started)
 
@@ -73,7 +75,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "automation_reloaded received; rebuilding dialog catalog for %s",
             entry.entry_id,
         )
-        hass.async_create_task(_async_rebuild_entry_dialog_catalog(hass, entry))
+        hass.loop.call_soon_threadsafe(lambda: hass.async_create_task(_async_rebuild_entry_dialog_catalog(hass, entry)))
 
     unsub_automation = hass.bus.async_listen(_EVENT_AUTOMATION_RELOADED, _automation_reloaded)
     entry_data[_DATA_UNSUBS].append(unsub_automation)
