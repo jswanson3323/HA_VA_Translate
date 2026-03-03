@@ -49,29 +49,15 @@ class EntityCatalog:
         self._items: List[EntityCatalogItem] = []
         self._by_id: Dict[str, EntityCatalogItem] = {}
         self._unsubs: List[callable] = []
-        self._supports_listen: bool = True
 
     async def async_start(self) -> None:
         ent_reg = er.async_get(self.hass)
         dev_reg = dr.async_get(self.hass)
         area_reg = ar.async_get(self.hass)
 
-        # Registry listener APIs differ across HA versions.
-        # If we can't subscribe, we still work via TTL refresh.
-        self._supports_listen = (
-            hasattr(ent_reg, "async_listen")
-            and hasattr(dev_reg, "async_listen")
-            and hasattr(area_reg, "async_listen")
-        )
-
-        if self._supports_listen:
-            self._unsubs.append(ent_reg.async_listen(self._on_registry_changed))
-            self._unsubs.append(dev_reg.async_listen(self._on_registry_changed))
-            self._unsubs.append(area_reg.async_listen(self._on_registry_changed))
-        else:
-            _LOGGER.debug(
-                "Entity/device/area registries do not support async_listen; using TTL refresh"
-            )
+        self._unsubs.append(er.async_track_entity_registry_updated_event(self.hass, self._on_registry_changed))
+        self._unsubs.append(dr.async_track_device_registry_updated_event(self.hass, self._on_registry_changed))
+        self._unsubs.append(ar.async_track_area_registry_updated_event(self.hass, self._on_registry_changed))
 
         await self.async_rebuild(force=True)
 
@@ -174,9 +160,4 @@ async def async_get_exposed_catalog(
         cat = EntityCatalog(hass, domains=domains)
         hass.data[_DATA_KEY] = cat
         await cat.async_start()
-    else:
-        # If we couldn't subscribe to registry change events, do a cheap TTL-based
-        # refresh check on every call.
-        if not getattr(cat, "_supports_listen", True):
-            await cat.async_rebuild()
     return cat

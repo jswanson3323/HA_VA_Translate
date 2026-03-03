@@ -109,6 +109,72 @@ class FallbackConversationAgent(
         """Return a list of supported languages."""
         return get_languages()
 
+
+    def _build_agent_maps(
+        self, agent_manager: conversation.AgentManager
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        """Build maps to resolve configured agent values.
+
+        Returns:
+          - id_to_name: agent_id (ULID) -> display name
+          - entity_id_to_id: conversation.<entity_id> -> agent_id (ULID)
+        """
+        id_to_name: dict[str, str] = {}
+        entity_id_to_id: dict[str, str] = {}
+
+        for info in agent_manager.async_get_agent_info():
+            id_to_name[info.id] = info.name
+            try:
+                agent = agent_manager.async_get_agent(info.id)
+            except Exception:  # pragma: no cover - defensive for HA internals
+                continue
+
+            # ConversationEntity-backed agents have a registry_entry with entity_id
+            entity_id = getattr(getattr(agent, "registry_entry", None), "entity_id", None)
+            if entity_id:
+                entity_id_to_id[entity_id] = info.id
+
+        return id_to_name, entity_id_to_id
+
+    def _resolve_agent_id(
+        self,
+        raw: object,
+        agent_manager: conversation.AgentManager,
+        id_to_name: dict[str, str],
+        entity_id_to_id: dict[str, str],
+    ) -> str | None:
+        """Resolve what we store in config (often an entity_id) to AgentManager's id.
+
+        The ConversationAgentSelector sometimes returns a conversation entity_id
+        (e.g. 'conversation.jarvis'). AgentManager expects the internal agent id (ULID).
+        """
+        if raw is None:
+            return None
+
+        raw_s = str(raw)
+
+        # Already a real agent id
+        if raw_s in id_to_name:
+            return raw_s
+
+        # Entity id selected from the UI
+        if raw_s in entity_id_to_id:
+            return entity_id_to_id[raw_s]
+
+        # Best-effort: match by display name (case-insensitive)
+        raw_l = raw_s.strip().lower()
+        for aid, name in id_to_name.items():
+            if name.strip().lower() == raw_l:
+                return aid
+
+        # Convenience: allow 'homeassistant' / constant to mean the Home Assistant agent
+        if raw_l in {"homeassistant", conversation.const.HOME_ASSISTANT_AGENT}:
+            for aid, name in id_to_name.items():
+                if name.strip().lower() in {"home assistant", "homeassistant"}:
+                    return aid
+
+        return None
+
     async def async_added_to_hass(self) -> None:
         """When entity is added to Home Assistant."""
         await super().async_added_to_hass()
@@ -143,29 +209,24 @@ class FallbackConversationAgent(
     ) -> conversation.ConversationResult:
         """Process a sentence."""
         agent_manager = conversation.get_agent_manager(self.hass)
-        # DEBUG: log all known AgentManager ids
-        try:
-            infos = agent_manager.async_get_agent_info()
-            _LOGGER.error(
-                "[DEBUG] Available AgentManager ids: %s",
-                [i.id for i in infos],
+        id_to_name, entity_id_to_id = self._build_agent_maps(agent_manager)
+
+        # Values stored from the config UI are usually conversation entity_ids like
+        # 'conversation.home_assistant' / 'conversation.jarvis'. AgentManager expects
+        # its internal agent id (ULID), so we resolve before calling it.
+        primary_raw = self.entry.options.get(CONF_PRIMARY_AGENT, self.entry.data.get(CONF_PRIMARY_AGENT))
+        fallback_raw = self.entry.options.get(CONF_FALLBACK_AGENT, self.entry.data.get(CONF_FALLBACK_AGENT))
+
+        primary_agent_id = self._resolve_agent_id(primary_raw, agent_manager, id_to_name, entity_id_to_id)
+        fallback_agent_id = self._resolve_agent_id(fallback_raw, agent_manager, id_to_name, entity_id_to_id)
+
+        if debug_enabled:
+            _LOGGER.warning(
+                "[ROUTER] primary_raw=%s -> %s fallback_raw=%s -> %s available=%s",
+                primary_raw, primary_agent_id, fallback_raw, fallback_agent_id, list(id_to_name.keys()),
             )
-        except Exception:
-            _LOGGER.exception("[DEBUG] Failed to list AgentManager ids")
-        agent_names = self._convert_agent_info_to_dict(
-            agent_manager.async_get_agent_info()
-        )
 
-        primary_agent_id = (
-            self.entry.options.get(CONF_PRIMARY_AGENT)
-            or self.entry.data.get(CONF_PRIMARY_AGENT)
-        )
-        fallback_agent_id = (
-            self.entry.options.get(CONF_FALLBACK_AGENT)
-            or self.entry.data.get(CONF_FALLBACK_AGENT)
-        )
-
-        agents = [a for a in (primary_agent_id, fallback_agent_id) if a]
+        agents: list[str] = [a for a in (primary_agent_id, fallback_agent_id) if a]
 
         debug_level = (
             self.entry.options.get(CONF_DEBUG_LEVEL)
@@ -238,7 +299,7 @@ class FallbackConversationAgent(
         result: conversation.ConversationResult | None = None
 
         for agent_id in agents:
-            agent_name = agent_names.get(agent_id, "[unknown]")
+            agent_name = id_to_name.get(agent_id, "[unknown]")
             if agent_name == "[unknown]":
                 _LOGGER.warning("agent_name not found for agent_id %s", agent_id)
 
