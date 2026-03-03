@@ -84,79 +84,19 @@ class FallbackConversationAgent(
         self, agents_info: list[conversation.AgentInfo]
     ) -> dict[str, str]:
         """Map both agent_id and conversation entity_id to display name."""
+
         agent_manager = conversation.get_agent_manager(self.hass)
 
-        r: dict[str, str] = {}
-        for agent_info in agents_info:
-            # Canonical agent id
-            r[agent_info.id] = agent_info.name
-
-            # Also map the registered conversation entity id, if available
-            try:
-                agent = agent_manager.async_get_agent(agent_info.id)
-            except Exception:  # noqa: BLE001
-                agent = None
-
-            if agent is not None and hasattr(agent, "registry_entry"):
-                r[agent.registry_entry.entity_id] = agent_info.name
-
-            _LOGGER.debug("agent_id %s has name %s", agent_info.id, agent_info.name)
-
-        return r
-
-    @property
-    def supported_languages(self) -> list[str]:
-        """Return a list of supported languages."""
-        return get_languages()
-
-    async def async_added_to_hass(self) -> None:
-        """When entity is added to Home Assistant."""
-        await super().async_added_to_hass()
-
-        # Assist pipeline migration helper is HA-version dependent.
-        migrate = getattr(assist_pipeline, "async_migrate_engine", None)
-        if migrate:
-            try:
-                migrate(self.hass, "conversation", self.entry.entry_id, self.entity_id)
-            except Exception as err:
-                _LOGGER.debug("assist_pipeline async_migrate_engine failed: %s", err)
-
-        conversation.async_set_agent(self.hass, self.entry, self)
-        self.entry.async_on_unload(
-            self.entry.add_update_listener(self._async_entry_update_listener)
-        )
-
-    async def async_will_remove_from_hass(self) -> None:
-        """When entity will be removed from Home Assistant."""
-        conversation.async_unset_agent(self.hass, self.entry)
-        await super().async_will_remove_from_hass()
-
-    async def _async_entry_update_listener(
-        self, hass: HomeAssistant, entry: ConfigEntry
-    ) -> None:
-        """Handle options update."""
-        self._attr_supported_features = conversation.ConversationEntityFeature.CONTROL
-
-    async def async_process(
-        self, user_input: conversation.ConversationInput
-    ) -> conversation.ConversationResult:
-        """Process a sentence."""
-                agent_manager = conversation.get_agent_manager(self.hass)
-
-        # Always initialize; avoids UnboundLocalError when no agents resolve.
-        result: conversation.ConversationResult | None = None
-        # Friendly names for logging / debug
-        agent_names: dict[str, str] = {}
-        for info in infos:
-            agent_names[info.id] = info.name or "[unknown]"
+        # Snapshot available agents (AgentManager uses internal ids, usually ULIDs)
+        infos = agent_manager.async_get_agent_info()
+        agent_names: dict[str, str] = {info.id: (info.name or "[unknown]") for info in infos}
 
         # Build a resolver that maps:
-        # - AgentManager internal ids (ULIDs)
+        # - internal ids (ULIDs)
         # - conversation entity_ids (e.g. conversation.home_assistant)
         # - short entity ids (e.g. home_assistant)
         # - human names (e.g. "Home Assistant")
         # -> internal id used by AgentManager
-        infos = agent_manager.async_get_agent_info()
         id_map: dict[str, str] = {}
         name_map: dict[str, str] = {}
 
@@ -164,17 +104,16 @@ class FallbackConversationAgent(
             internal_id = info.id
             id_map[internal_id] = internal_id
 
+            # Map registry entity_id (if the agent is an entity-backed agent)
             try:
                 agent_obj = agent_manager.async_get_agent(internal_id)
                 reg_entry = getattr(agent_obj, "registry_entry", None)
                 ent_id = getattr(reg_entry, "entity_id", None) if reg_entry else None
                 if ent_id:
                     id_map[ent_id] = internal_id
-                    # allow storing without "conversation."
                     if ent_id.startswith("conversation."):
                         id_map[ent_id.split(".", 1)[1]] = internal_id
-            except Exception:
-                # Don't block on weird agents; we'll just skip extra mappings.
+            except Exception:  # noqa: BLE001
                 pass
 
             if info.name:
@@ -187,11 +126,9 @@ class FallbackConversationAgent(
             if not raw_s:
                 return None
 
-            # direct mappings
             if raw_s in id_map:
                 return id_map[raw_s]
 
-            # case-insensitive name match
             lower = raw_s.lower()
             if lower in name_map:
                 return name_map[lower]
@@ -204,15 +141,6 @@ class FallbackConversationAgent(
 
         primary_id = _resolve_agent_id(primary_raw)
         fallback_id = _resolve_agent_id(fallback_raw)
-
-        _LOGGER.error(
-            "[ROUTER] primary_raw=%s primary_id=%s fallback_raw=%s fallback_id=%s available_internal_ids=%s",
-            primary_raw,
-            primary_id,
-            fallback_raw,
-            fallback_id,
-            [i.id for i in infos],
-        )
 
         # Only run agents that we can resolve
         agents: list[str] = [a for a in (primary_id, fallback_id) if a]
