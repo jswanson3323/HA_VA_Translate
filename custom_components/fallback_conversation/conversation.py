@@ -381,7 +381,12 @@ class FallbackConversationAgent(
 
         # SAFETY: do not crash if agent does not exist
         try:
-            agent = agent_manager.async_get_agent(agent_id)
+            if agent_id == DEFAULT_SENTINEL:
+                agent = getattr(agent_manager, "default_agent", None)
+                if agent is None:
+                    raise ValueError("Default Home Assistant agent not available")
+            else:
+                agent = agent_manager.async_get_agent(agent_id)
         except ValueError:
             _LOGGER.error(
                 "[DEBUG] Agent '%s' not found. Skipping this agent.",

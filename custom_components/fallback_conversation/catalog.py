@@ -51,16 +51,37 @@ class EntityCatalog:
         self._unsubs: List[callable] = []
 
     async def async_start(self) -> None:
-        ent_reg = er.async_get(self.hass)
-        dev_reg = dr.async_get(self.hass)
-        area_reg = ar.async_get(self.hass)
+        """Start listeners."""
+        # Always do an initial build
+        await self._async_build()
 
-        self._unsubs.append(er.async_track_entity_registry_updated_event(self.hass, self._on_registry_changed))
-        self._unsubs.append(dr.async_track_device_registry_updated_event(self.hass, self._on_registry_changed))
-        self._unsubs.append(ar.async_track_area_registry_updated_event(self.hass, self._on_registry_changed))
+        # --- entity registry updates ---
+        # HA's entity registry listener APIs have changed a few times.
+        # We support multiple variants and fall back to the event bus.
+        try:
+            ent_reg = entity_registry.async_get(self.hass)
 
-        await self.async_rebuild(force=True)
-
+            # Newer helper (if present)
+            if hasattr(er, "async_track_entity_registry_updated_event"):
+                self._unsubs.append(
+                    er.async_track_entity_registry_updated_event(
+                        self.hass, self._on_registry_changed
+                    )
+                )
+            # Older registry object listener (rare on modern HA)
+            elif hasattr(ent_reg, "async_listen"):
+                self._unsubs.append(ent_reg.async_listen(self._on_registry_changed))
+            else:
+                # Generic event bus fallback
+                self._unsubs.append(
+                    self.hass.bus.async_listen(
+                        "entity_registry_updated", self._on_registry_changed
+                    )
+                )
+        except Exception:  # pragma: no cover - defensive
+            _LOGGER.exception(
+                "Failed to attach entity registry listener; catalog will be rebuilt on demand only."
+            )
     async def async_stop(self) -> None:
         for unsub in self._unsubs:
             try:
