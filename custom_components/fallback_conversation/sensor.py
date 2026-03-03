@@ -23,7 +23,6 @@ class FallbackResultEntity(SensorEntity, RestoreEntity):
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry):
         """Initialize the entity."""
-        self
         self.hass = hass
         self.entry = entry
         self._attr_name = f"{entry.title} Result"

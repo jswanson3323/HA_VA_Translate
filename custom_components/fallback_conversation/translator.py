@@ -8,9 +8,14 @@ from typing import Iterable, Optional, Tuple
 
 from .catalog import EntityCatalogItem
 
+import logging
+
+_LOGGER = logging.getLogger(__name__)
+
 # --- tuning ---
 MIN_SCORE = 0.88
 MIN_MARGIN = 0.06
+AREA_MIN_SCORE = 0.58
 
 ALLOW_DOMAINS = {
     "light",
@@ -61,6 +66,10 @@ def _looks_like_command(s: str) -> bool:
     return bool(re.match(r"^(turn|switch|toggle|set|increase|decrease)\b", s))
 
 
+def _looks_like_dialog_candidate(s: str) -> bool:
+    return bool(re.match(r"^(turn|switch|toggle|set|start)\b", s))
+
+
 def _apply_confusions(s: str) -> str:
     for pattern, repl in CONFUSION_MAP:
         s = re.sub(pattern, repl, s)
@@ -106,6 +115,62 @@ def _make_candidates(item: EntityCatalogItem) -> list[str]:
     return sorted(cands)
 
 
+def _best_area_match(target: str, catalog: Iterable[EntityCatalogItem]) -> Optional[str]:
+    """Return best fuzzy-matched area name if strong enough."""
+    target_n = _norm(target)
+
+    # Remove common device words before area matching
+    device_words = {"light", "fan", "switch", "cover", "lock", "thermostat", "scene"}
+    tokens = [t for t in target_n.split() if t not in device_words]
+    target_n = " ".join(tokens)
+
+    areas = { _norm(i.area_name) for i in catalog if i.area_name }
+
+    best_area = None
+    best_score = 0.0
+
+    for area in areas:
+        score = _token_score(target_n, area)
+        _LOGGER.warning("[AREA SCORE] target='%s' area='%s' score=%.3f", target_n, area, score)
+        if score > best_score:
+            best_score = score
+            best_area = area
+
+    if best_area:
+        _LOGGER.warning("[AREA BEST] target='%s' best_area='%s' best_score=%.3f", target_n, best_area, best_score)
+
+    if best_score >= AREA_MIN_SCORE:
+        return best_area
+
+    return None
+
+
+def _strip_area_from_target(target_n: str, matched_area: str) -> str:
+    """Remove likely area phrase tokens from target before entity scoring.
+
+    Example: target='break room fan', matched_area='great room' -> 'fan'
+    This keeps entity matching strict while making area fuzziness tolerant.
+    """
+    if not target_n or not matched_area:
+        return target_n
+
+    # If the exact area text appears, remove it directly
+    if matched_area in target_n:
+        stripped = target_n.replace(matched_area, " ")
+        return _norm(stripped)
+
+    # Common area suffixes (lets us remove 'break room', 'master bedroom', etc.)
+    suffixes = {"room", "bedroom", "bathroom", "garage", "kitchen", "office", "basement", "living"}
+    area_tokens = matched_area.split()
+
+    # If matched_area contains a known suffix, remove '<word> <suffix>' occurrences from target
+    for suf in suffixes:
+        if suf in area_tokens:
+            target_n = re.sub(rf"\b\w+\s+{re.escape(suf)}\b", " ", target_n)
+
+    return _norm(target_n)
+
+
 def _resolve_entity(
     target: str,
     catalog: Iterable[EntityCatalogItem],
@@ -114,6 +179,21 @@ def _resolve_entity(
     target_n = _norm(target)
     sat_area_n = _norm(satellite_area) if satellite_area else None
 
+    # Try resolving area first (improves "break room" vs "great room")
+    matched_area = _best_area_match(target, catalog)
+
+    score_target_n = target_n
+    if matched_area:
+        stripped = _strip_area_from_target(target_n, matched_area)
+        if stripped:
+            score_target_n = stripped
+        _LOGGER.warning(
+            "[ENTITY TARGET] original='%s' matched_area='%s' scoring_target='%s'",
+            target_n,
+            matched_area,
+            score_target_n,
+        )
+
     best = None  # (score, item)
     second = None
 
@@ -121,8 +201,20 @@ def _resolve_entity(
         if item.domain not in ALLOW_DOMAINS:
             continue
 
+        # If we detected a likely area, prefer entities in that area
+        if matched_area and item.area_name:
+            if _norm(item.area_name) != matched_area:
+                continue
+
         for cand in _make_candidates(item):
-            score = _token_score(target_n, cand)
+            score = _token_score(score_target_n, cand)
+            _LOGGER.warning(
+                "[ENTITY SCORE] target='%s' cand='%s' entity='%s' score=%.3f",
+                score_target_n,
+                cand,
+                item.entity_id,
+                score,
+            )
 
             # tiny tie-break bump if satellite area matches entity area
             if sat_area_n and item.area_name and _norm(item.area_name) == sat_area_n:
@@ -168,10 +260,64 @@ def _parse_action(s: str):
     return None
 
 
+def _dialog_target_from_command(s: str) -> str:
+    parsed = _parse_action(s)
+    if not parsed:
+        return s
+    if parsed[0] in ("on", "off", "toggle", "set"):
+        return _norm(parsed[1])
+    return s
+
+
+def _should_bypass_dialog(
+    normalized_text: str,
+    dialog_phrases: Iterable[str],
+    min_score: float,
+) -> tuple[bool, str, float, str]:
+    if not _looks_like_dialog_candidate(normalized_text):
+        return False, "", 0.0, ""
+
+    utterance_target = _dialog_target_from_command(normalized_text)
+
+    best_score = 0.0
+    best_phrase = ""
+    for phrase in dialog_phrases:
+        phrase_n = _norm(phrase)
+        if not phrase_n:
+            continue
+
+        phrase_target = _dialog_target_from_command(phrase_n)
+
+        if (
+            phrase_n in normalized_text
+            or normalized_text in phrase_n
+            or phrase_target in utterance_target
+            or utterance_target in phrase_target
+        ):
+            return True, "contains", 1.0, phrase_n
+
+        score = max(
+            _token_score(normalized_text, phrase_n),
+            _token_score(utterance_target, phrase_n),
+            _token_score(utterance_target, phrase_target),
+        )
+        if score > best_score:
+            best_score = score
+            best_phrase = phrase_n
+
+    if best_score >= min_score:
+        return True, "fuzzy", best_score, best_phrase
+
+    return False, "", best_score, best_phrase
+
+
 def translate_to_action(
     text: str,
     catalog: Iterable[EntityCatalogItem],
     satellite_area: Optional[str] = None,
+    dialog_phrases: Optional[Iterable[str]] = None,
+    enable_dialog_bypass: bool = True,
+    dialog_bypass_min_score: float = 0.60,
 ) -> TranslateResult:
     if not text:
         return TranslateResult(handled=False, reason="no_text")
@@ -182,6 +328,26 @@ def translate_to_action(
         return TranslateResult(handled=False, reason="not_command", normalized_text=normalized)
 
     normalized = _apply_confusions(normalized)
+
+    if enable_dialog_bypass and dialog_phrases:
+        should_bypass, bypass_kind, bypass_score, bypass_phrase = _should_bypass_dialog(
+            normalized,
+            dialog_phrases,
+            min_score=dialog_bypass_min_score,
+        )
+        if should_bypass:
+            _LOGGER.debug(
+                "Dialog bypass triggered (%s): phrase='%s' score=%.3f normalized='%s'",
+                bypass_kind,
+                bypass_phrase,
+                bypass_score,
+                normalized,
+            )
+            return TranslateResult(
+                handled=False,
+                reason=f"dialog_bypass_{bypass_kind}",
+                normalized_text=normalized,
+            )
 
     parsed = _parse_action(normalized)
     if not parsed:

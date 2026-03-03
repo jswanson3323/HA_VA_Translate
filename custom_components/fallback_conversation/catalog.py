@@ -55,13 +55,13 @@ class EntityCatalog:
         dev_reg = dr.async_get(self.hass)
         area_reg = ar.async_get(self.hass)
 
-        # Registry listeners are optional; API differs by HA version.
+        # Registry listeners are optional; HA has changed these APIs across versions.
         for reg, name in ((ent_reg, "entity"), (dev_reg, "device"), (area_reg, "area")):
             listen = getattr(reg, "async_listen", None)
             if callable(listen):
                 self._unsubs.append(listen(self._on_registry_changed))
             else:
-                _LOGGER.debug("Registry %s has no async_listen; catalog will rebuild on demand", name)
+                _LOGGER.debug("Registry %s has no async_listen; catalog will refresh on demand", name)
 
         await self.async_rebuild(force=True)
 
