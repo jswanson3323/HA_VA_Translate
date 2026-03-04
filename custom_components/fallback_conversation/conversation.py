@@ -158,7 +158,12 @@ class FallbackConversationAgent(
 
         raw_l = raw_s.strip().lower()
 
-        # Special-case: use AgentManager.default_agent for the built-in Home Assistant agent
+        # Special-case: resolve the built-in Home Assistant agent.
+        #
+        # In HA 2026.x the selector may store the entity_id "conversation.home_assistant".
+        # The AgentManager itself is keyed by internal ids (often ULIDs). On some systems
+        # the Home Assistant agent is *not* the default agent (users can set an LLM as
+        # default), so we prefer finding the agent by its display name first.
         if raw_l in {
             "conversation.home_assistant",
             "conversation.homeassistant",
@@ -166,6 +171,16 @@ class FallbackConversationAgent(
             "homeassistant",
             getattr(conversation.const, "HOME_ASSISTANT_AGENT", "homeassistant").lower(),
         }:
+            # Prefer the agent whose display name is "Home Assistant" if present.
+            for aid, name in id_to_name.items():
+                if name.strip().lower() in {"home assistant", "homeassistant"}:
+                    return aid
+
+            # Fall back to the manager default if available.
+            default_agent = getattr(agent_manager, "default_agent", None)
+            if default_agent is not None:
+                return getattr(default_agent, "id", DEFAULT_AGENT_SENTINEL)
+
             return DEFAULT_AGENT_SENTINEL
 
         # Already a real agent id
@@ -314,9 +329,12 @@ class FallbackConversationAgent(
         result: conversation.ConversationResult | None = None
 
         for agent_id in agents:
-            agent_name = id_to_name.get(agent_id, "[unknown]")
-            if agent_name == "[unknown]":
-                _LOGGER.warning("agent_name not found for agent_id %s", agent_id)
+            if agent_id == DEFAULT_AGENT_SENTINEL:
+                agent_name = "Home Assistant"
+            else:
+                agent_name = id_to_name.get(agent_id, "[unknown]")
+                if agent_name == "[unknown]":
+                    _LOGGER.warning("agent_name not found for agent_id %s", agent_id)
 
             result = await self._async_process_agent(
                 agent_manager,
